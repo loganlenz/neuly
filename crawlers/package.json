@@ -1,0 +1,46 @@
+{
+  "name": "neuly-crawlers",
+  "version": "1.0.0",
+  "description": "Web crawlers for the Neuly psychedelic medicine research platform",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "crawl:trials": "tsx src/index.ts --crawler=clinicaltrials",
+    "crawl:pubmed": "tsx src/index.ts --crawler=pubmed",
+    "crawl:companies": "tsx src/index.ts --crawler=companies",
+    "crawl:jobs": "tsx src/index.ts --crawler=jobs",
+    "crawl:events": "tsx src/index.ts --crawler=events",
+    "crawl:people": "tsx src/index.ts --crawler=people",
+    "crawl:all": "tsx src/index.ts --crawler=all",
+    "lint": "eslint src/",
+    "test": "vitest"
+  },
+  "keywords": [
+    "crawler",
+    "psychedelics",
+    "research",
+    "clinical-trials",
+    "pubmed"
+  ],
+  "author": "Neuly Team",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.6.2",
+    "cheerio": "^1.0.0-rc.12",
+    "dotenv": "^16.3.1",
+    "fast-xml-parser": "^4.3.2",
+    "p-limit": "^5.0.0",
+    "p-retry": "^6.2.0",
+    "winston": "^3.11.0",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.4",
+    "tsx": "^4.6.2",
+    "typescript": "^5.3.3",
+    "vitest": "^1.0.4"
+  }
+}
