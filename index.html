@@ -29,7 +29,126 @@
 <body>
   <div id="root"></div>
   <script type="text/babel">
-    const { useState, useEffect, useRef } = React;
+    const { useState, useEffect, useRef, createContext, useContext } = React;
+
+    // API Configuration
+    const API_BASE_URL = 'http://localhost:3001/api';
+
+    // API Helper Functions
+    const api = {
+      async get(endpoint) {
+        try {
+          const response = await fetch(`${API_BASE_URL}${endpoint}`);
+          if (!response.ok) throw new Error('API request failed');
+          return await response.json();
+        } catch (error) {
+          console.error(`API Error: ${endpoint}`, error);
+          return null;
+        }
+      },
+
+      async getDashboard() {
+        return this.get('/dashboard');
+      },
+
+      async getClinicalTrials(params = {}) {
+        const query = new URLSearchParams(params).toString();
+        return this.get(`/clinical-trials${query ? '?' + query : ''}`);
+      },
+
+      async getResearchPapers(params = {}) {
+        const query = new URLSearchParams(params).toString();
+        return this.get(`/research${query ? '?' + query : ''}`);
+      },
+
+      async getCompanies(params = {}) {
+        const query = new URLSearchParams(params).toString();
+        return this.get(`/companies${query ? '?' + query : ''}`);
+      },
+
+      async getPeople(params = {}) {
+        const query = new URLSearchParams(params).toString();
+        return this.get(`/people${query ? '?' + query : ''}`);
+      },
+
+      async getJobs(params = {}) {
+        const query = new URLSearchParams(params).toString();
+        return this.get(`/jobs${query ? '?' + query : ''}`);
+      },
+
+      async getEvents(params = {}) {
+        const query = new URLSearchParams(params).toString();
+        return this.get(`/events${query ? '?' + query : ''}`);
+      },
+
+      async search(query) {
+        return this.get(`/search?q=${encodeURIComponent(query)}`);
+      }
+    };
+
+    // Data Context for sharing API data across components
+    const DataContext = createContext(null);
+
+    const DataProvider = ({ children }) => {
+      const [apiData, setApiData] = useState({
+        companies: [],
+        people: [],
+        clinicalTrials: [],
+        researchPapers: [],
+        jobs: [],
+        events: [],
+        stats: null,
+        loading: true,
+        error: null,
+        usingApi: false
+      });
+
+      useEffect(() => {
+        const fetchData = async () => {
+          try {
+            const dashboard = await api.getDashboard();
+            if (dashboard && dashboard.counts) {
+              // API is available, fetch all data
+              const [companiesRes, peopleRes, trialsRes, papersRes, jobsRes, eventsRes] = await Promise.all([
+                api.getCompanies(),
+                api.getPeople(),
+                api.getClinicalTrials(),
+                api.getResearchPapers(),
+                api.getJobs(),
+                api.getEvents()
+              ]);
+
+              setApiData({
+                companies: companiesRes?.data || [],
+                people: peopleRes?.data || [],
+                clinicalTrials: trialsRes?.data || [],
+                researchPapers: papersRes?.data || [],
+                jobs: jobsRes?.data || [],
+                events: eventsRes?.data || [],
+                stats: dashboard,
+                loading: false,
+                error: null,
+                usingApi: true
+              });
+              console.log('✅ Connected to Neuly API - using live data');
+            } else {
+              // API not available, use fallback data
+              setApiData(prev => ({ ...prev, loading: false, usingApi: false }));
+              console.log('ℹ️ API not available - using static data');
+            }
+          } catch (error) {
+            console.log('ℹ️ API not available - using static data');
+            setApiData(prev => ({ ...prev, loading: false, error: error.message, usingApi: false }));
+          }
+        };
+
+        fetchData();
+      }, []);
+
+      return React.createElement(DataContext.Provider, { value: apiData }, children);
+    };
+
+    const useApiData = () => useContext(DataContext);
 
     const logoBase64 = "data:image/webp;base64,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";
 
@@ -364,9 +483,14 @@
 
     // MAIN DASHBOARD PAGE
     const DashboardPage = ({ user, setCurrentPage }) => {
+      const apiData = useApiData();
       const currentHour = new Date().getHours();
       const greeting = currentHour < 12 ? 'Good morning' : currentHour < 18 ? 'Good afternoon' : 'Good evening';
-      
+
+      // Use API stats if available
+      const stats = apiData?.stats;
+      const usingApi = apiData?.usingApi || false;
+
       const recentActivity = [
         { type: 'course', action: 'Continued course', detail: 'Psilocybin-Assisted Therapy: Part 1', time: '2 hours ago', icon: '🎓', color: '#a8c5e2' },
         { type: 'company', action: 'Viewed company', detail: 'COMPASS Pathways', time: '4 hours ago', icon: '🏢', color: '#7dd3c0' },
@@ -389,7 +513,13 @@
         { icon: '🧪', label: 'Clinical Studies', desc: 'Browse & enroll in studies', page: 'studies', color: '#f0b775', gradient: 'linear-gradient(135deg, rgba(240,183,117,0.15) 0%, rgba(240,183,117,0.05) 100%)' },
       ];
 
-      const weeklyStats = [
+      // Use API data for stats if available, otherwise use sample data
+      const weeklyStats = usingApi && stats?.counts ? [
+        { label: 'Clinical Trials', value: stats.counts.clinicalTrials || 0, change: 'live', up: true },
+        { label: 'Research Papers', value: stats.counts.researchPapers || 0, change: 'live', up: true },
+        { label: 'Companies', value: stats.counts.companies || 0, change: 'live', up: true },
+        { label: 'People', value: stats.counts.people || 0, change: 'live', up: true },
+      ] : [
         { label: 'Research Queries', value: 12, change: '+4', up: true },
         { label: 'Companies Viewed', value: 8, change: '+2', up: true },
         { label: 'Course Progress', value: '75%', change: '+15%', up: true },
@@ -2435,7 +2565,52 @@
       );
     };
 
-    ReactDOM.render(<App />, document.getElementById('root'));
+    // API Status Indicator Component
+    const ApiStatusIndicator = () => {
+      const apiData = useApiData();
+      if (!apiData) return null;
+
+      const { usingApi, loading } = apiData;
+
+      if (loading) return null;
+
+      return (
+        <div style={{
+          position: 'fixed',
+          bottom: '20px',
+          right: '20px',
+          zIndex: 1000,
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
+          padding: '8px 16px',
+          background: usingApi ? 'rgba(125, 211, 192, 0.15)' : 'rgba(255, 255, 255, 0.05)',
+          border: `1px solid ${usingApi ? 'rgba(125, 211, 192, 0.3)' : 'rgba(255, 255, 255, 0.1)'}`,
+          borderRadius: '20px',
+          fontSize: '12px',
+          color: usingApi ? '#7dd3c0' : '#6b7370'
+        }}>
+          <div style={{
+            width: '8px',
+            height: '8px',
+            borderRadius: '50%',
+            background: usingApi ? '#7dd3c0' : '#6b7370',
+            animation: usingApi ? 'pulse 2s ease-in-out infinite' : 'none'
+          }} />
+          {usingApi ? 'Live Data' : 'Static Data'}
+        </div>
+      );
+    };
+
+    // Wrapped App with DataProvider
+    const WrappedApp = () => (
+      <DataProvider>
+        <App />
+        <ApiStatusIndicator />
+      </DataProvider>
+    );
+
+    ReactDOM.render(<WrappedApp />, document.getElementById('root'));
   </script>
 </body>
 </html>
