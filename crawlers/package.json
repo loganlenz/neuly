@@ -17,6 +17,8 @@
     "crawl:events": "tsx src/index.ts --crawler=events",
     "crawl:people": "tsx src/index.ts --crawler=people",
     "crawl:all": "tsx src/index.ts --crawler=all",
+    "seed": "tsx src/seed.ts",
+    "setup": "npm run seed && npm run server",
     "lint": "eslint src/",
     "test": "vitest"
   },

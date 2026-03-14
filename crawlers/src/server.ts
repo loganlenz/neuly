@@ -2,6 +2,9 @@
 import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
+import { existsSync } from 'fs';
 import { DataStorage, DataType } from './utils/storage.js';
 import { logger } from './utils/logger.js';
 import {
@@ -15,6 +18,9 @@ import {
   SUBSTANCES
 } from './models/types.js';
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
 const app = express();
 const PORT = process.env.PORT || 3001;
 const storage = new DataStorage();
@@ -23,9 +29,17 @@ const storage = new DataStorage();
 app.use(cors());
 app.use(express.json());
 
-// Request logging
+// Serve the frontend (index.html) from the project root
+const projectRoot = join(__dirname, '..', '..');
+if (existsSync(join(projectRoot, 'index.html'))) {
+  app.use(express.static(projectRoot));
+}
+
+// Request logging (skip static files)
 app.use((req: Request, _res: Response, next: NextFunction) => {
-  logger.info(`${req.method} ${req.path}`);
+  if (req.path.startsWith('/api')) {
+    logger.info(`${req.method} ${req.path}`);
+  }
   next();
 });
 
@@ -602,9 +616,16 @@ app.get('/api/search', async (req: Request, res: Response) => {
 // ERROR HANDLING
 // ============================================
 
-// 404 handler
-app.use((_req: Request, res: Response) => {
-  res.status(404).json({ error: 'Endpoint not found' });
+// Catch-all: serve index.html for non-API routes (SPA support)
+app.use((req: Request, res: Response, next: NextFunction) => {
+  if (req.path.startsWith('/api')) {
+    return res.status(404).json({ error: 'Endpoint not found' });
+  }
+  const indexPath = join(projectRoot, 'index.html');
+  if (existsSync(indexPath)) {
+    return res.sendFile(indexPath);
+  }
+  next();
 });
 
 // Error handler
@@ -623,17 +644,17 @@ app.listen(PORT, () => {
   logger.info('='.repeat(50));
   logger.info(`Server running on http://localhost:${PORT}`);
   logger.info('');
-  logger.info('Available endpoints:');
-  logger.info('  GET /api/health          - Health check');
-  logger.info('  GET /api/stats           - Data statistics');
+  logger.info('Open http://localhost:' + PORT + ' in your browser');
+  logger.info('');
+  logger.info('API endpoints:');
   logger.info('  GET /api/dashboard       - Dashboard summary');
-  logger.info('  GET /api/search?q=       - Global search');
   logger.info('  GET /api/clinical-trials - Clinical trials');
   logger.info('  GET /api/research        - Research papers');
   logger.info('  GET /api/companies       - Companies');
   logger.info('  GET /api/people          - People');
   logger.info('  GET /api/jobs            - Job postings');
   logger.info('  GET /api/events          - Events');
+  logger.info('  GET /api/search?q=       - Global search');
   logger.info('='.repeat(50));
 });
 
