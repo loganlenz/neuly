@@ -29,7 +29,126 @@
 <body>
   <div id="root"></div>
   <script type="text/babel">
-    const { useState, useEffect, useRef } = React;
+    const { useState, useEffect, useRef, createContext, useContext } = React;
+
+    // API Configuration - uses relative path when served from the same server
+    const API_BASE_URL = (window.location.port === '3001') ? '/api' : 'http://localhost:3001/api';
+
+    // API Helper Functions
+    const api = {
+      async get(endpoint) {
+        try {
+          const response = await fetch(`${API_BASE_URL}${endpoint}`);
+          if (!response.ok) throw new Error('API request failed');
+          return await response.json();
+        } catch (error) {
+          console.error(`API Error: ${endpoint}`, error);
+          return null;
+        }
+      },
+
+      async getDashboard() {
+        return this.get('/dashboard');
+      },
+
+      async getClinicalTrials(params = {}) {
+        const query = new URLSearchParams(params).toString();
+        return this.get(`/clinical-trials${query ? '?' + query : ''}`);
+      },
+
+      async getResearchPapers(params = {}) {
+        const query = new URLSearchParams(params).toString();
+        return this.get(`/research${query ? '?' + query : ''}`);
+      },
+
+      async getCompanies(params = {}) {
+        const query = new URLSearchParams(params).toString();
+        return this.get(`/companies${query ? '?' + query : ''}`);
+      },
+
+      async getPeople(params = {}) {
+        const query = new URLSearchParams(params).toString();
+        return this.get(`/people${query ? '?' + query : ''}`);
+      },
+
+      async getJobs(params = {}) {
+        const query = new URLSearchParams(params).toString();
+        return this.get(`/jobs${query ? '?' + query : ''}`);
+      },
+
+      async getEvents(params = {}) {
+        const query = new URLSearchParams(params).toString();
+        return this.get(`/events${query ? '?' + query : ''}`);
+      },
+
+      async search(query) {
+        return this.get(`/search?q=${encodeURIComponent(query)}`);
+      }
+    };
+
+    // Data Context for sharing API data across components
+    const DataContext = createContext(null);
+
+    const DataProvider = ({ children }) => {
+      const [apiData, setApiData] = useState({
+        companies: [],
+        people: [],
+        clinicalTrials: [],
+        researchPapers: [],
+        jobs: [],
+        events: [],
+        stats: null,
+        loading: true,
+        error: null,
+        usingApi: false
+      });
+
+      useEffect(() => {
+        const fetchData = async () => {
+          try {
+            const dashboard = await api.getDashboard();
+            if (dashboard && dashboard.counts) {
+              // API is available, fetch all data
+              const [companiesRes, peopleRes, trialsRes, papersRes, jobsRes, eventsRes] = await Promise.all([
+                api.getCompanies(),
+                api.getPeople(),
+                api.getClinicalTrials(),
+                api.getResearchPapers(),
+                api.getJobs(),
+                api.getEvents()
+              ]);
+
+              setApiData({
+                companies: companiesRes?.data || [],
+                people: peopleRes?.data || [],
+                clinicalTrials: trialsRes?.data || [],
+                researchPapers: papersRes?.data || [],
+                jobs: jobsRes?.data || [],
+                events: eventsRes?.data || [],
+                stats: dashboard,
+                loading: false,
+                error: null,
+                usingApi: true
+              });
+              console.log('✅ Connected to Neuly API - using live data');
+            } else {
+              // API not available, use fallback data
+              setApiData(prev => ({ ...prev, loading: false, usingApi: false }));
+              console.log('ℹ️ API not available - using static data');
+            }
+          } catch (error) {
+            console.log('ℹ️ API not available - using static data');
+            setApiData(prev => ({ ...prev, loading: false, error: error.message, usingApi: false }));
+          }
+        };
+
+        fetchData();
+      }, []);
+
+      return React.createElement(DataContext.Provider, { value: apiData }, children);
+    };
+
+    const useApiData = () => useContext(DataContext);
 
     const logoBase64 = "data:image/webp;base64,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";
 
@@ -364,9 +483,14 @@
 
     // MAIN DASHBOARD PAGE
     const DashboardPage = ({ user, setCurrentPage }) => {
+      const apiData = useApiData();
       const currentHour = new Date().getHours();
       const greeting = currentHour < 12 ? 'Good morning' : currentHour < 18 ? 'Good afternoon' : 'Good evening';
-      
+
+      // Use API stats if available
+      const stats = apiData?.stats;
+      const usingApi = apiData?.usingApi || false;
+
       const recentActivity = [
         { type: 'course', action: 'Continued course', detail: 'Psilocybin-Assisted Therapy: Part 1', time: '2 hours ago', icon: '🎓', color: '#a8c5e2' },
         { type: 'company', action: 'Viewed company', detail: 'COMPASS Pathways', time: '4 hours ago', icon: '🏢', color: '#7dd3c0' },
@@ -389,7 +513,13 @@
         { icon: '🧪', label: 'Clinical Studies', desc: 'Browse & enroll in studies', page: 'studies', color: '#f0b775', gradient: 'linear-gradient(135deg, rgba(240,183,117,0.15) 0%, rgba(240,183,117,0.05) 100%)' },
       ];
 
-      const weeklyStats = [
+      // Use API data for stats if available, otherwise use sample data
+      const weeklyStats = usingApi && stats?.counts ? [
+        { label: 'Clinical Trials', value: stats.counts.clinicalTrials || 0, change: 'live', up: true },
+        { label: 'Research Papers', value: stats.counts.researchPapers || 0, change: 'live', up: true },
+        { label: 'Companies', value: stats.counts.companies || 0, change: 'live', up: true },
+        { label: 'People', value: stats.counts.people || 0, change: 'live', up: true },
+      ] : [
         { label: 'Research Queries', value: 12, change: '+4', up: true },
         { label: 'Companies Viewed', value: 8, change: '+2', up: true },
         { label: 'Course Progress', value: '75%', change: '+15%', up: true },
@@ -2108,36 +2238,194 @@
     };
 
     const EducationPage = ({ user }) => {
-      const courses = [{ id: 1, provider: 'Fluence', title: 'Psilocybin-Assisted Therapy: Part 1', price: '$399', level: 'Beginner' }, { id: 2, provider: 'Fluence', title: 'Integration Techniques', price: '$249', level: 'Intermediate' }, { id: 3, provider: 'Skylight', title: 'Harm Reduction Fundamentals', price: '$149', level: 'Beginner' }];
+      const [selectedLevel, setSelectedLevel] = useState('All');
+      const [selectedCategory, setSelectedCategory] = useState('All');
+      const courses = [
+        { id: 1, provider: 'Fluence', title: 'Psychedelic-Assisted Therapy Foundations', price: '$399', level: 'Beginner', category: 'Therapy', duration: '8 weeks', students: 2340, rating: 4.8, description: 'Comprehensive introduction to psychedelic-assisted therapy covering psilocybin, MDMA, and ketamine protocols.' },
+        { id: 2, provider: 'Fluence', title: 'Integration Techniques for Clinicians', price: '$249', level: 'Intermediate', category: 'Therapy', duration: '6 weeks', students: 1580, rating: 4.9, description: 'Advanced integration methods including somatic, narrative, and mindfulness-based approaches for post-session care.' },
+        { id: 3, provider: 'Skylight', title: 'Harm Reduction Fundamentals', price: '$149', level: 'Beginner', category: 'Safety', duration: '4 weeks', students: 3120, rating: 4.7, description: 'Evidence-based harm reduction strategies for psychedelic use, community settings, and clinical contexts.' },
+        { id: 4, provider: 'MAPS', title: 'MDMA-Assisted Therapy for PTSD', price: '$599', level: 'Advanced', category: 'Therapy', duration: '12 weeks', students: 890, rating: 4.9, description: 'Deep dive into the MAPS MDMA therapy protocol, clinical trial methodology, and therapist competencies.' },
+        { id: 5, provider: 'Naropa University', title: 'Contemplative Psychedelic Studies', price: '$1,200', level: 'Advanced', category: 'Academic', duration: '16 weeks', students: 420, rating: 4.6, description: 'Graduate-level course exploring intersections of contemplative traditions and psychedelic science.' },
+        { id: 6, provider: 'Psychedelic.Support', title: 'Ketamine-Assisted Psychotherapy', price: '$349', level: 'Intermediate', category: 'Therapy', duration: '6 weeks', students: 1950, rating: 4.8, description: 'Clinical training in ketamine-assisted psychotherapy including dosing, monitoring, and therapeutic frameworks.' },
+        { id: 7, provider: 'CIIS', title: 'Psychedelic Research Methods', price: '$899', level: 'Advanced', category: 'Academic', duration: '10 weeks', students: 340, rating: 4.7, description: 'Research methodology for psychedelic clinical trials including study design, outcome measures, and regulatory frameworks.' },
+        { id: 8, provider: 'Innerlogue', title: 'Psychedelic Peer Support Training', price: '$199', level: 'Beginner', category: 'Safety', duration: '3 weeks', students: 4500, rating: 4.5, description: 'Training for peer support workers in festival, community, and clinical psychedelic settings.' },
+        { id: 9, provider: 'Synthesis Institute', title: 'Psilocybin Facilitation Practicum', price: '$2,500', level: 'Advanced', category: 'Therapy', duration: '8 weeks', students: 280, rating: 4.9, description: 'Hands-on practicum for psilocybin session facilitation including preparation, guiding, and integration.' },
+        { id: 10, provider: 'Entheo Society', title: 'History of Psychedelics', price: 'Free', level: 'Beginner', category: 'Academic', duration: '5 weeks', students: 8200, rating: 4.4, description: 'From ancient rituals to modern science — explore the cultural and scientific history of psychedelic substances.' },
+        { id: 11, provider: 'TheraPsil', title: 'Psilocybin for End-of-Life Care', price: '$449', level: 'Intermediate', category: 'Therapy', duration: '6 weeks', students: 720, rating: 4.8, description: 'Specialized training in psilocybin-assisted therapy for existential distress in palliative care settings.' },
+        { id: 12, provider: 'Skylight', title: 'Microdosing Science & Protocols', price: '$179', level: 'Beginner', category: 'Safety', duration: '4 weeks', students: 5600, rating: 4.3, description: 'Evidence-based review of microdosing research, protocols, and self-assessment tools.' }
+      ];
+      const levels = ['All', 'Beginner', 'Intermediate', 'Advanced'];
+      const categories = ['All', 'Therapy', 'Academic', 'Safety'];
+      const filtered = courses.filter(c => (selectedLevel === 'All' || c.level === selectedLevel) && (selectedCategory === 'All' || c.category === selectedCategory));
+      const levelColors = { Beginner: '#7dd3c0', Intermediate: '#5c6ac4', Advanced: '#f0b775' };
       return (
         <div style={{ position: 'relative', zIndex: 1, paddingTop: '100px', minHeight: '100vh' }}>
           <div style={{ padding: '40px', maxWidth: '1280px', margin: '0 auto' }}>
-            <div style={{ textAlign: 'center', marginBottom: '48px' }}><div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}><img src={logoBase64} alt="" style={{ height: '32px', filter: 'brightness(0) invert(1)' }} /><span style={{ fontSize: '32px', fontWeight: 300, color: '#7dd3c0' }}>edu</span></div><h1 style={{ fontFamily: '"Fraunces", serif', fontSize: '42px', fontWeight: 600, color: '#fff', marginBottom: '12px' }}>Education</h1></div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '24px' }}>{courses.map(course => (<div key={course.id} style={{ ...sharedStyles.card }}><span style={{ fontSize: '16px', fontWeight: 600, color: '#5c6ac4', marginBottom: '12px', display: 'block' }}>{course.provider}</span><h3 style={{ fontSize: '18px', fontWeight: 600, color: '#fff', marginBottom: '16px' }}>{course.title}</h3><div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><span style={{ fontSize: '20px', fontWeight: 600, color: '#fff' }}>{course.price}</span><button style={{ ...sharedStyles.button, padding: '10px 20px', fontSize: '14px' }}>Enroll</button></div></div>))}</div>
+            <div style={{ textAlign: 'center', marginBottom: '48px' }}><div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}><img src={logoBase64} alt="" style={{ height: '32px', filter: 'brightness(0) invert(1)' }} /><span style={{ fontSize: '32px', fontWeight: 300, color: '#7dd3c0' }}>edu</span></div><h1 style={{ fontFamily: '"Fraunces", serif', fontSize: '42px', fontWeight: 600, color: '#fff', marginBottom: '12px' }}>Education</h1><p style={{ fontSize: '16px', color: '#6b7370', maxWidth: '600px', margin: '0 auto' }}>Professional training and courses in psychedelic-assisted therapy, research, and harm reduction</p></div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', marginBottom: '32px' }}>
+              {[{ label: 'Total Courses', value: courses.length, icon: '📚' }, { label: 'Total Students', value: courses.reduce((s, c) => s + c.students, 0).toLocaleString(), icon: '🎓' }, { label: 'Avg Rating', value: (courses.reduce((s, c) => s + c.rating, 0) / courses.length).toFixed(1), icon: '⭐' }, { label: 'Providers', value: new Set(courses.map(c => c.provider)).size, icon: '🏫' }].map((stat, i) => (<div key={i} style={{ ...sharedStyles.card, textAlign: 'center', padding: '20px' }}><span style={{ fontSize: '24px' }}>{stat.icon}</span><div style={{ fontSize: '28px', fontWeight: 700, color: '#fff', margin: '8px 0 4px' }}>{stat.value}</div><div style={{ fontSize: '12px', color: '#6b7370', textTransform: 'uppercase', letterSpacing: '1px' }}>{stat.label}</div></div>))}
+            </div>
+            <div style={{ display: 'flex', gap: '12px', marginBottom: '32px', flexWrap: 'wrap' }}>
+              {levels.map(l => (<button key={l} onClick={() => setSelectedLevel(l)} style={{ padding: '8px 20px', borderRadius: '20px', border: selectedLevel === l ? 'none' : '1px solid rgba(255,255,255,0.1)', background: selectedLevel === l ? '#5c6ac4' : 'transparent', color: selectedLevel === l ? '#fff' : '#6b7370', cursor: 'pointer', fontSize: '14px', fontWeight: 500 }}>{l}</button>))}
+              <div style={{ width: '1px', background: 'rgba(255,255,255,0.1)', margin: '0 8px' }} />
+              {categories.map(c => (<button key={c} onClick={() => setSelectedCategory(c)} style={{ padding: '8px 20px', borderRadius: '20px', border: selectedCategory === c ? 'none' : '1px solid rgba(255,255,255,0.1)', background: selectedCategory === c ? '#7dd3c0' : 'transparent', color: selectedCategory === c ? '#0a0f0d' : '#6b7370', cursor: 'pointer', fontSize: '14px', fontWeight: 500 }}>{c}</button>))}
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '24px' }}>{filtered.map(course => (<div key={course.id} style={{ ...sharedStyles.card, display: 'flex', flexDirection: 'column' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}><span style={{ fontSize: '14px', fontWeight: 600, color: '#5c6ac4' }}>{course.provider}</span><span style={{ fontSize: '11px', padding: '4px 10px', borderRadius: '12px', background: `${levelColors[course.level]}22`, color: levelColors[course.level], fontWeight: 600 }}>{course.level}</span></div>
+              <h3 style={{ fontSize: '18px', fontWeight: 600, color: '#fff', marginBottom: '8px', lineHeight: 1.3 }}>{course.title}</h3>
+              <p style={{ fontSize: '13px', color: '#6b7370', marginBottom: '16px', lineHeight: 1.5, flex: 1 }}>{course.description}</p>
+              <div style={{ display: 'flex', gap: '16px', marginBottom: '16px', fontSize: '12px', color: '#6b7370' }}><span>🕐 {course.duration}</span><span>👥 {course.students.toLocaleString()}</span><span>⭐ {course.rating}</span></div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '16px' }}><span style={{ fontSize: '22px', fontWeight: 700, color: course.price === 'Free' ? '#7dd3c0' : '#fff' }}>{course.price}</span><button style={{ ...sharedStyles.button, padding: '10px 24px', fontSize: '14px' }}>Enroll</button></div>
+            </div>))}</div>
+            {filtered.length === 0 && <div style={{ textAlign: 'center', padding: '60px', color: '#6b7370' }}><p style={{ fontSize: '18px' }}>No courses match your filters</p></div>}
           </div>
         </div>
       );
     };
 
     const CarePage = ({ user }) => {
-      const providers = [{ id: 1, name: 'Mindbloom', type: 'Ketamine Clinic', location: 'USA', rating: 4.8 }, { id: 2, name: 'Beckley Retreats', type: 'Psilocybin Retreat', location: 'Jamaica', rating: 4.9 }];
+      const [selectedType, setSelectedType] = useState('All');
+      const [selectedRegion, setSelectedRegion] = useState('All');
+      const providers = [
+        { id: 1, name: 'Mindbloom', type: 'Ketamine Clinic', location: 'New York, USA', region: 'North America', rating: 4.8, reviews: 1240, substances: ['Ketamine'], accepting: true, insurance: true, description: 'At-home ketamine therapy with psychiatric evaluation, guided sessions, and integration coaching.', website: 'mindbloom.com' },
+        { id: 2, name: 'Beckley Retreats', type: 'Psilocybin Retreat', location: 'Montego Bay, Jamaica', region: 'Caribbean', rating: 4.9, reviews: 380, substances: ['Psilocybin'], accepting: true, insurance: false, description: 'Evidence-based psilocybin retreat programs combining science and ceremony in a luxury setting.', website: 'beckleyretreats.com' },
+        { id: 3, name: 'Field Trip Health', type: 'Ketamine Clinic', location: 'Toronto, Canada', region: 'North America', rating: 4.7, reviews: 890, substances: ['Ketamine'], accepting: true, insurance: false, description: 'Ketamine-enhanced psychotherapy in modern clinic settings with experienced therapists.', website: 'fieldtriphealth.com' },
+        { id: 4, name: 'Nushama', type: 'Ketamine Clinic', location: 'Manhattan, USA', region: 'North America', rating: 4.8, reviews: 560, substances: ['Ketamine'], accepting: true, insurance: false, description: 'Premium ketamine wellness center offering IV infusions and psychedelic-assisted therapy in NYC.', website: 'nushama.com' },
+        { id: 5, name: 'Synthesis Institute', type: 'Psilocybin Retreat', location: 'Amsterdam, Netherlands', region: 'Europe', rating: 4.9, reviews: 620, substances: ['Psilocybin (Truffles)'], accepting: true, insurance: false, description: 'Legal psilocybin truffle ceremonies in a research-informed, group retreat format in the Netherlands.', website: 'synthesisretreat.com' },
+        { id: 6, name: 'Numinus Wellness', type: 'Integrative Clinic', location: 'Vancouver, Canada', region: 'North America', rating: 4.6, reviews: 430, substances: ['Ketamine', 'MDMA (trial)'], accepting: true, insurance: true, description: 'Integrative mental health clinic offering ketamine therapy and participating in MDMA clinical trials.', website: 'numinus.com' },
+        { id: 7, name: 'MyDelica', type: 'Psilocybin Retreat', location: 'Cascais, Portugal', region: 'Europe', rating: 4.7, reviews: 210, substances: ['Psilocybin (Truffles)'], accepting: true, insurance: false, description: 'Personalized psilocybin retreat experiences with clinical preparation and integration support in Portugal.', website: 'mydelica.com' },
+        { id: 8, name: 'Klarisana', type: 'Ketamine Clinic', location: 'Austin, USA', region: 'North America', rating: 4.5, reviews: 780, substances: ['Ketamine'], accepting: true, insurance: true, description: 'Multi-location ketamine clinic specializing in treatment-resistant depression, PTSD, and chronic pain.', website: 'klarisana.com' },
+        { id: 9, name: 'Silo Wellness', type: 'Psilocybin Retreat', location: 'Oaxaca, Mexico', region: 'Latin America', rating: 4.6, reviews: 290, substances: ['Psilocybin'], accepting: true, insurance: false, description: 'Culturally respectful psilocybin retreats integrating indigenous Mazatec traditions with modern therapy.', website: 'silowellness.com' },
+        { id: 10, name: 'Innerwell', type: 'Ketamine Clinic', location: 'Los Angeles, USA', region: 'North America', rating: 4.7, reviews: 950, substances: ['Ketamine'], accepting: true, insurance: false, description: 'Telehealth ketamine therapy combining at-home sublingual ketamine with virtual therapist sessions.', website: 'innerwell.com' },
+        { id: 11, name: 'Tandava Retreats', type: 'Ayahuasca Retreat', location: 'Iquitos, Peru', region: 'Latin America', rating: 4.8, reviews: 340, substances: ['Ayahuasca'], accepting: true, insurance: false, description: 'Traditional ayahuasca ceremonies with Shipibo healers in the Peruvian Amazon with medical screening.', website: 'tandavaretreats.com' },
+        { id: 12, name: 'Novamind', type: 'Integrative Clinic', location: 'Salt Lake City, USA', region: 'North America', rating: 4.5, reviews: 320, substances: ['Ketamine', 'Spravato'], accepting: true, insurance: true, description: 'Network of mental health clinics offering ketamine, Spravato, and psychedelic-assisted therapy research.', website: 'novamind.ca' }
+      ];
+      const types = ['All', 'Ketamine Clinic', 'Psilocybin Retreat', 'Integrative Clinic', 'Ayahuasca Retreat'];
+      const regions = ['All', 'North America', 'Europe', 'Caribbean', 'Latin America'];
+      const filtered = providers.filter(p => (selectedType === 'All' || p.type === selectedType) && (selectedRegion === 'All' || p.region === selectedRegion));
+      const typeColors = { 'Ketamine Clinic': '#5c6ac4', 'Psilocybin Retreat': '#7dd3c0', 'Integrative Clinic': '#f0b775', 'Ayahuasca Retreat': '#c084fc' };
       return (
         <div style={{ position: 'relative', zIndex: 1, paddingTop: '100px', minHeight: '100vh' }}>
           <div style={{ padding: '40px', maxWidth: '1280px', margin: '0 auto' }}>
-            <div style={{ textAlign: 'center', marginBottom: '48px' }}><div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}><img src={logoBase64} alt="" style={{ height: '32px', filter: 'brightness(0) invert(1)' }} /><span style={{ fontSize: '32px', fontWeight: 300, color: '#7dd3c0' }}>care</span></div><h1 style={{ fontFamily: '"Fraunces", serif', fontSize: '42px', fontWeight: 600, color: '#fff', marginBottom: '12px' }}>Care Directory</h1></div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '24px' }}>{providers.map(p => (<div key={p.id} style={{ ...sharedStyles.card }}><h3 style={{ fontSize: '20px', fontWeight: 600, color: '#fff', marginBottom: '8px' }}>{p.name}</h3><p style={{ fontSize: '14px', color: '#7dd3c0', marginBottom: '8px' }}>{p.type}</p><div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><span style={{ fontSize: '14px', color: '#6b7370' }}>📍 {p.location}</span><span style={{ color: '#f0b775' }}>★ {p.rating}</span></div></div>))}</div>
+            <div style={{ textAlign: 'center', marginBottom: '48px' }}><div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}><img src={logoBase64} alt="" style={{ height: '32px', filter: 'brightness(0) invert(1)' }} /><span style={{ fontSize: '32px', fontWeight: 300, color: '#7dd3c0' }}>care</span></div><h1 style={{ fontFamily: '"Fraunces", serif', fontSize: '42px', fontWeight: 600, color: '#fff', marginBottom: '12px' }}>Care Directory</h1><p style={{ fontSize: '16px', color: '#6b7370', maxWidth: '600px', margin: '0 auto' }}>Find trusted psychedelic therapy clinics, retreat centers, and integrative care providers worldwide</p></div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', marginBottom: '32px' }}>
+              {[{ label: 'Providers', value: providers.length, icon: '🏥' }, { label: 'Countries', value: new Set(providers.map(p => p.location.split(', ').pop())).size, icon: '🌍' }, { label: 'Avg Rating', value: (providers.reduce((s, p) => s + p.rating, 0) / providers.length).toFixed(1), icon: '⭐' }, { label: 'Accept Insurance', value: providers.filter(p => p.insurance).length, icon: '🛡️' }].map((stat, i) => (<div key={i} style={{ ...sharedStyles.card, textAlign: 'center', padding: '20px' }}><span style={{ fontSize: '24px' }}>{stat.icon}</span><div style={{ fontSize: '28px', fontWeight: 700, color: '#fff', margin: '8px 0 4px' }}>{stat.value}</div><div style={{ fontSize: '12px', color: '#6b7370', textTransform: 'uppercase', letterSpacing: '1px' }}>{stat.label}</div></div>))}
+            </div>
+            <div style={{ display: 'flex', gap: '12px', marginBottom: '32px', flexWrap: 'wrap' }}>
+              {types.map(t => (<button key={t} onClick={() => setSelectedType(t)} style={{ padding: '8px 20px', borderRadius: '20px', border: selectedType === t ? 'none' : '1px solid rgba(255,255,255,0.1)', background: selectedType === t ? '#5c6ac4' : 'transparent', color: selectedType === t ? '#fff' : '#6b7370', cursor: 'pointer', fontSize: '14px', fontWeight: 500 }}>{t}</button>))}
+              <div style={{ width: '1px', background: 'rgba(255,255,255,0.1)', margin: '0 8px' }} />
+              {regions.map(r => (<button key={r} onClick={() => setSelectedRegion(r)} style={{ padding: '8px 20px', borderRadius: '20px', border: selectedRegion === r ? 'none' : '1px solid rgba(255,255,255,0.1)', background: selectedRegion === r ? '#7dd3c0' : 'transparent', color: selectedRegion === r ? '#0a0f0d' : '#6b7370', cursor: 'pointer', fontSize: '14px', fontWeight: 500 }}>{r}</button>))}
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '24px' }}>{filtered.map(p => (<div key={p.id} style={{ ...sharedStyles.card }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
+                <div><h3 style={{ fontSize: '20px', fontWeight: 600, color: '#fff', marginBottom: '6px' }}>{p.name}</h3><span style={{ fontSize: '12px', padding: '4px 10px', borderRadius: '12px', background: `${typeColors[p.type] || '#5c6ac4'}22`, color: typeColors[p.type] || '#5c6ac4', fontWeight: 600 }}>{p.type}</span></div>
+                <div style={{ textAlign: 'right' }}><div style={{ color: '#f0b775', fontSize: '16px', fontWeight: 600 }}>★ {p.rating}</div><div style={{ fontSize: '11px', color: '#6b7370' }}>{p.reviews} reviews</div></div>
+              </div>
+              <p style={{ fontSize: '13px', color: '#6b7370', marginBottom: '16px', lineHeight: 1.5 }}>{p.description}</p>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '16px' }}>{p.substances.map(s => (<span key={s} style={{ fontSize: '11px', padding: '3px 8px', borderRadius: '8px', background: 'rgba(125,211,192,0.1)', color: '#7dd3c0' }}>{s}</span>))}</div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '16px' }}>
+                <div style={{ display: 'flex', gap: '16px', fontSize: '12px', color: '#6b7370' }}><span>📍 {p.location}</span>{p.insurance && <span style={{ color: '#7dd3c0' }}>✓ Insurance</span>}</div>
+                <div style={{ display: 'flex', gap: '8px' }}>{p.accepting && <span style={{ fontSize: '11px', padding: '4px 10px', borderRadius: '12px', background: 'rgba(125,211,192,0.15)', color: '#7dd3c0', fontWeight: 500 }}>Accepting Patients</span>}<button style={{ ...sharedStyles.button, padding: '8px 20px', fontSize: '13px' }}>View</button></div>
+              </div>
+            </div>))}</div>
+            {filtered.length === 0 && <div style={{ textAlign: 'center', padding: '60px', color: '#6b7370' }}><p style={{ fontSize: '18px' }}>No providers match your filters</p></div>}
           </div>
         </div>
       );
     };
 
     const StudiesPage = ({ user }) => {
-      const studies = [{ id: 1, substance: 'Psilocybin', title: 'Psilocybin for Treatment-Resistant Depression', sponsor: 'COMPASS Pathways', phase: 'Phase 2b', status: 'Recruiting', location: 'Multiple Sites, USA', color: '#7dd3c0' }, { id: 2, substance: 'MDMA', title: 'MDMA-Assisted Therapy for PTSD', sponsor: 'MAPS PBC', phase: 'Phase 3', status: 'Recruiting', location: 'Boulder, CO', color: '#f0b775' }, { id: 3, substance: 'Ketamine', title: 'Ketamine vs ECT for Severe Depression', sponsor: 'Johns Hopkins', phase: 'Phase 3', status: 'Recruiting', location: 'Baltimore, MD', color: '#a8c5e2' }];
+      const [selectedSubstance, setSelectedSubstance] = useState('All');
+      const [selectedPhase, setSelectedPhase] = useState('All');
+      const [selectedStatus, setSelectedStatus] = useState('All');
+      const [searchQuery, setSearchQuery] = useState('');
+      const apiData = useApiData();
+
+      const substanceFilters = ['All', 'Psilocybin', 'MDMA', 'Ketamine', 'LSD', 'DMT', 'Ibogaine'];
+      const phaseFilters = ['All', 'Phase 1', 'Phase 2', 'Phase 3'];
+      const statusFilters = ['All', 'Recruiting', 'Active', 'Completed'];
+
+      const studies = [
+        { id: 1, substance: 'Psilocybin', title: 'COMP360 Psilocybin Therapy for Treatment-Resistant Depression', sponsor: 'COMPASS Pathways', phase: 'Phase 3', status: 'Recruiting', location: 'Multiple Sites, USA & UK', enrollment: 924, nctId: 'NCT05624268', color: '#7dd3c0' },
+        { id: 2, substance: 'MDMA', title: 'MDMA-Assisted Therapy for PTSD (MAPP2)', sponsor: 'Lykos Therapeutics / MAPS', phase: 'Phase 3', status: 'Completed', location: 'Multiple Sites, USA', enrollment: 104, nctId: 'NCT04030169', color: '#f0b775' },
+        { id: 3, substance: 'LSD', title: 'MM-120 (LSD) for Generalized Anxiety Disorder', sponsor: 'MindMed', phase: 'Phase 3', status: 'Active', location: 'Multiple Sites, USA', enrollment: 200, nctId: 'NCT05547516', color: '#d4a5c9' },
+        { id: 4, substance: 'Psilocybin', title: 'CYB003 Deuterated Psilocybin for Major Depressive Disorder', sponsor: 'Cybin Inc.', phase: 'Phase 3', status: 'Recruiting', location: '30+ Sites', enrollment: 400, nctId: 'NCT05312151', color: '#7dd3c0' },
+        { id: 5, substance: 'Psilocybin', title: 'Psilocybin-Assisted Therapy for Alcohol Use Disorder', sponsor: 'NYU Langone Health', phase: 'Phase 2', status: 'Recruiting', location: 'New York, NY', enrollment: 200, nctId: 'NCT04620759', color: '#7dd3c0' },
+        { id: 6, substance: 'Ketamine', title: 'Ketamine-Assisted Psychotherapy for Treatment-Resistant Depression', sponsor: 'Johns Hopkins University', phase: 'Phase 2', status: 'Recruiting', location: 'Baltimore, MD', enrollment: 120, color: '#a8c5e2' },
+        { id: 7, substance: 'Ibogaine', title: 'TRP-8802 (Ibogaine Analog) for Opioid Use Disorder', sponsor: 'Atai Life Sciences', phase: 'Phase 1', status: 'Recruiting', location: 'Multiple Sites', enrollment: 30, color: '#98d4a0' },
+        { id: 8, substance: 'Psilocybin', title: 'Psilocybin-Assisted Therapy for Smoking Cessation', sponsor: 'Johns Hopkins University', phase: 'Phase 2', status: 'Recruiting', location: 'Baltimore, MD', enrollment: 80, color: '#7dd3c0' },
+        { id: 9, substance: 'DMT', title: 'VLS-01 (DMT) for Treatment-Resistant Depression', sponsor: 'Atai / Small Pharma', phase: 'Phase 2', status: 'Active', location: 'UK & Europe', enrollment: 100, color: '#e8c898' },
+        { id: 10, substance: 'Psilocybin', title: 'Psilocybin for End-of-Life Anxiety in Cancer Patients', sponsor: 'NYU Langone Health', phase: 'Phase 2', status: 'Recruiting', location: 'New York, NY', enrollment: 60, color: '#7dd3c0' },
+        { id: 11, substance: 'MDMA', title: 'MDMA-Assisted Therapy for Eating Disorders', sponsor: 'MAPS', phase: 'Phase 2', status: 'Recruiting', location: 'Vancouver, Canada', enrollment: 40, color: '#f0b775' },
+        { id: 12, substance: 'Ketamine', title: 'Esketamine (Spravato) vs IV Ketamine for Depression', sponsor: 'Yale University', phase: 'Phase 3', status: 'Active', location: 'New Haven, CT', enrollment: 150, color: '#a8c5e2' },
+      ];
+
+      const filteredStudies = studies.filter(s =>
+        (selectedSubstance === 'All' || s.substance === selectedSubstance) &&
+        (selectedPhase === 'All' || s.phase.includes(selectedPhase.replace('Phase ', ''))) &&
+        (selectedStatus === 'All' || s.status === selectedStatus) &&
+        (searchQuery === '' || s.title.toLowerCase().includes(searchQuery.toLowerCase()) || s.sponsor.toLowerCase().includes(searchQuery.toLowerCase()))
+      );
+
       return (
         <div style={{ position: 'relative', zIndex: 1, paddingTop: '100px', minHeight: '100vh' }}>
           <div style={{ padding: '40px', maxWidth: '1280px', margin: '0 auto' }}>
-            <div style={{ textAlign: 'center', marginBottom: '48px' }}><span style={{ fontSize: '48px' }}>🧪</span><h1 style={{ fontFamily: '"Fraunces", serif', fontSize: '42px', fontWeight: 600, color: '#fff', marginBottom: '12px' }}>Clinical Studies</h1><p style={{ fontSize: '18px', color: '#a0a8a4' }}>Discover and enroll in research studies</p></div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>{studies.map(study => (<div key={study.id} style={{ ...sharedStyles.card, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><div><div style={{ display: 'flex', gap: '10px', marginBottom: '10px' }}><span style={{ padding: '4px 10px', fontSize: '11px', fontWeight: 600, background: `${study.color}20`, color: study.color, borderRadius: '4px' }}>{study.substance}</span><span style={{ padding: '4px 10px', fontSize: '11px', background: 'rgba(255,255,255,0.05)', color: '#a0a8a4', borderRadius: '4px' }}>{study.phase}</span><span style={{ padding: '4px 10px', fontSize: '11px', background: 'rgba(125,211,192,0.15)', color: '#7dd3c0', borderRadius: '4px' }}>{study.status}</span></div><h3 style={{ fontSize: '18px', fontWeight: 600, color: '#fff', marginBottom: '6px' }}>{study.title}</h3><p style={{ fontSize: '14px', color: '#6b7370' }}>{study.sponsor} • {study.location}</p></div><button style={{ ...sharedStyles.button, padding: '12px 24px' }}>Inquire</button></div>))}</div>
+            <div style={{ textAlign: 'center', marginBottom: '48px' }}>
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
+                <img src={logoBase64} alt="" style={{ height: '32px', filter: 'brightness(0) invert(1)' }} />
+                <span style={{ fontSize: '32px', fontWeight: 300, color: '#7dd3c0' }}>studies</span>
+              </div>
+              <h1 style={{ fontFamily: '"Fraunces", serif', fontSize: '42px', fontWeight: 600, color: '#fff', marginBottom: '12px' }}>Clinical Studies</h1>
+              <p style={{ fontSize: '18px', color: '#a0a8a4', maxWidth: '600px', margin: '0 auto' }}>Discover and enroll in psychedelic medicine research studies</p>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '20px', marginBottom: '40px' }}>
+              {[{ value: studies.length, label: 'Active Studies', color: '#7dd3c0' }, { value: studies.filter(s => s.status === 'Recruiting').length, label: 'Recruiting', color: '#f0b775' }, { value: studies.filter(s => s.phase.includes('3')).length, label: 'Phase 3', color: '#a8c5e2' }, { value: studies.reduce((sum, s) => sum + (s.enrollment || 0), 0).toLocaleString(), label: 'Total Enrollment', color: '#d4a5c9' }].map((stat, i) => (
+                <div key={i} style={{ ...sharedStyles.card, textAlign: 'center' }}>
+                  <div style={{ fontFamily: '"Fraunces", serif', fontSize: '32px', fontWeight: 600, color: stat.color }}>{stat.value}</div>
+                  <div style={{ fontSize: '14px', color: '#6b7370' }}>{stat.label}</div>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ display: 'flex', gap: '16px', marginBottom: '32px', flexWrap: 'wrap' }}>
+              <input type="text" placeholder="Search studies or sponsors..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} style={{ flex: 1, minWidth: '250px', padding: '14px 18px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', color: '#fff', fontSize: '14px', outline: 'none' }} />
+              <select value={selectedSubstance} onChange={(e) => setSelectedSubstance(e.target.value)} style={{ padding: '14px 18px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', color: '#a0a8a4', fontSize: '14px', minWidth: '140px' }}>
+                {substanceFilters.map(s => <option key={s} value={s}>{s === 'All' ? 'All Substances' : s}</option>)}
+              </select>
+              <select value={selectedPhase} onChange={(e) => setSelectedPhase(e.target.value)} style={{ padding: '14px 18px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', color: '#a0a8a4', fontSize: '14px', minWidth: '120px' }}>
+                {phaseFilters.map(p => <option key={p} value={p}>{p === 'All' ? 'All Phases' : p}</option>)}
+              </select>
+              <select value={selectedStatus} onChange={(e) => setSelectedStatus(e.target.value)} style={{ padding: '14px 18px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', color: '#a0a8a4', fontSize: '14px', minWidth: '130px' }}>
+                {statusFilters.map(st => <option key={st} value={st}>{st === 'All' ? 'All Statuses' : st}</option>)}
+              </select>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+              {filteredStudies.map(study => (
+                <div key={study.id} style={{ ...sharedStyles.card, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ display: 'flex', gap: '10px', marginBottom: '10px', flexWrap: 'wrap' }}>
+                      <span style={{ padding: '4px 10px', fontSize: '11px', fontWeight: 600, background: `${study.color}20`, color: study.color, borderRadius: '4px' }}>{study.substance}</span>
+                      <span style={{ padding: '4px 10px', fontSize: '11px', background: 'rgba(255,255,255,0.05)', color: '#a0a8a4', borderRadius: '4px' }}>{study.phase}</span>
+                      <span style={{ padding: '4px 10px', fontSize: '11px', background: study.status === 'Recruiting' ? 'rgba(125,211,192,0.15)' : study.status === 'Completed' ? 'rgba(168,197,226,0.15)' : 'rgba(240,183,117,0.15)', color: study.status === 'Recruiting' ? '#7dd3c0' : study.status === 'Completed' ? '#a8c5e2' : '#f0b775', borderRadius: '4px' }}>{study.status}</span>
+                      {study.enrollment && <span style={{ padding: '4px 10px', fontSize: '11px', background: 'rgba(255,255,255,0.03)', color: '#6b7370', borderRadius: '4px' }}>n={study.enrollment}</span>}
+                    </div>
+                    <h3 style={{ fontSize: '18px', fontWeight: 600, color: '#fff', marginBottom: '6px' }}>{study.title}</h3>
+                    <p style={{ fontSize: '14px', color: '#6b7370' }}>{study.sponsor} &bull; {study.location}</p>
+                  </div>
+                  <button style={{ ...sharedStyles.button, padding: '12px 24px', flexShrink: 0, marginLeft: '20px' }}>{study.status === 'Recruiting' ? 'Inquire' : 'View'}</button>
+                </div>
+              ))}
+            </div>
+
+            {filteredStudies.length === 0 && (
+              <div style={{ textAlign: 'center', padding: '60px 40px' }}>
+                <div style={{ fontSize: '48px', marginBottom: '16px' }}>🔍</div>
+                <h3 style={{ fontSize: '20px', fontWeight: 600, color: '#fff', marginBottom: '8px' }}>No studies found</h3>
+                <p style={{ fontSize: '15px', color: '#6b7370' }}>Try adjusting your search or filters</p>
+              </div>
+            )}
           </div>
         </div>
       );
@@ -2435,7 +2723,52 @@
       );
     };
 
-    ReactDOM.render(<App />, document.getElementById('root'));
+    // API Status Indicator Component
+    const ApiStatusIndicator = () => {
+      const apiData = useApiData();
+      if (!apiData) return null;
+
+      const { usingApi, loading } = apiData;
+
+      if (loading) return null;
+
+      return (
+        <div style={{
+          position: 'fixed',
+          bottom: '20px',
+          right: '20px',
+          zIndex: 1000,
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
+          padding: '8px 16px',
+          background: usingApi ? 'rgba(125, 211, 192, 0.15)' : 'rgba(255, 255, 255, 0.05)',
+          border: `1px solid ${usingApi ? 'rgba(125, 211, 192, 0.3)' : 'rgba(255, 255, 255, 0.1)'}`,
+          borderRadius: '20px',
+          fontSize: '12px',
+          color: usingApi ? '#7dd3c0' : '#6b7370'
+        }}>
+          <div style={{
+            width: '8px',
+            height: '8px',
+            borderRadius: '50%',
+            background: usingApi ? '#7dd3c0' : '#6b7370',
+            animation: usingApi ? 'pulse 2s ease-in-out infinite' : 'none'
+          }} />
+          {usingApi ? 'Live Data' : 'Static Data'}
+        </div>
+      );
+    };
+
+    // Wrapped App with DataProvider
+    const WrappedApp = () => (
+      <DataProvider>
+        <App />
+        <ApiStatusIndicator />
+      </DataProvider>
+    );
+
+    ReactDOM.render(<WrappedApp />, document.getElementById('root'));
   </script>
 </body>
 </html>
