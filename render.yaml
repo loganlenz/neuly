@@ -1,0 +1,32 @@
+# Render Blueprint for Neuly
+# Docs: https://render.com/docs/blueprint-spec
+#
+# This deploys a single Node web service that serves BOTH the frontend
+# (index.html) and the JSON API (/api/*) from the same origin.
+#
+# To deploy:
+#   1. Push this repo to GitHub (branch is already set up).
+#   2. In the Render dashboard: New > Blueprint, then connect this repo.
+#   3. Render reads this file, builds, seeds the data, and starts the server.
+services:
+  - type: web
+    name: neuly
+    runtime: node
+    plan: free
+    # rootDir keeps build/start commands scoped to the backend package.
+    rootDir: crawlers
+    # Compile TypeScript, then generate the seed dataset the API serves.
+    # Uses the compiled JS (not tsx) so it works even without dev deps at runtime.
+    buildCommand: npm ci && npm run build && npm run seed:prod
+    startCommand: npm run serve
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      # Render injects PORT automatically; the server already honors it.
+      # Optional: raises the PubMed crawler rate limit. Safe to leave unset.
+      - key: NCBI_API_KEY
+        sync: false
+      - key: LOG_LEVEL
+        value: info

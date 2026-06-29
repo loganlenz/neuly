@@ -31,8 +31,18 @@
   <script type="text/babel">
     const { useState, useEffect, useRef, createContext, useContext } = React;
 
-    // API Configuration - uses relative path when served from the same server
-    const API_BASE_URL = (window.location.port === '3001') ? '/api' : 'http://localhost:3001/api';
+    // API Configuration
+    // In production (and `npm run server`) the API is served from the same origin,
+    // so a relative `/api` works on any host/domain. Only fall back to the local
+    // API port during standalone frontend dev (opening the file directly or from a
+    // different dev-server port).
+    const API_BASE_URL = (() => {
+      const { protocol, hostname, port } = window.location;
+      const isStandaloneDev =
+        protocol === 'file:' ||
+        ((hostname === 'localhost' || hostname === '127.0.0.1') && port !== '3001');
+      return isStandaloneDev ? 'http://localhost:3001/api' : '/api';
+    })();
 
     // API Helper Functions
     const api = {

@@ -339,11 +339,11 @@ export class PubMedCrawler extends BaseCrawler<ResearchPaper> {
    * Extract DOI from article data
    */
   private extractDOI(
-    articleData: PubMedArticle['MedlineCitation'],
+    articleData: NonNullable<NonNullable<PubMedArticle['MedlineCitation']>['Article']>,
     pubmedData?: PubMedArticle['PubmedData']
   ): string | undefined {
     // Try ELocationID first
-    const elocations = articleData?.Article?.ELocationID;
+    const elocations = articleData?.ELocationID;
     if (elocations) {
       const locationArray = Array.isArray(elocations) ? elocations : [elocations];
       for (const loc of locationArray) {
@@ -370,7 +370,7 @@ export class PubMedCrawler extends BaseCrawler<ResearchPaper> {
    * Extract and format authors
    */
   private extractAuthors(
-    authorList: NonNullable<PubMedArticle['MedlineCitation']>['Article']['AuthorList']['Author']
+    authorList: NonNullable<NonNullable<NonNullable<PubMedArticle['MedlineCitation']>['Article']>['AuthorList']>['Author']
   ): ResearchPaper['authors'] {
     if (!authorList) return [];
 
@@ -445,7 +445,7 @@ export class PubMedCrawler extends BaseCrawler<ResearchPaper> {
    * Extract abstract text
    */
   private extractAbstract(
-    abstractText: PubMedArticle['MedlineCitation']['Article']['Abstract']['AbstractText']
+    abstractText: NonNullable<NonNullable<NonNullable<PubMedArticle['MedlineCitation']>['Article']>['Abstract']>['AbstractText']
   ): string | undefined {
     if (!abstractText) return undefined;
 
@@ -471,7 +471,7 @@ export class PubMedCrawler extends BaseCrawler<ResearchPaper> {
    * Extract keywords
    */
   private extractKeywords(
-    keywords: PubMedArticle['MedlineCitation']['KeywordList']['Keyword']
+    keywords: NonNullable<NonNullable<PubMedArticle['MedlineCitation']>['KeywordList']>['Keyword']
   ): string[] {
     if (!keywords) return [];
     if (typeof keywords === 'string') return [keywords];
@@ -482,7 +482,7 @@ export class PubMedCrawler extends BaseCrawler<ResearchPaper> {
    * Extract MeSH terms
    */
   private extractMeshTerms(
-    meshHeadings: NonNullable<PubMedArticle['MedlineCitation']['MeshHeadingList']>['MeshHeading']
+    meshHeadings: NonNullable<NonNullable<PubMedArticle['MedlineCitation']>['MeshHeadingList']>['MeshHeading']
   ): string[] {
     if (!meshHeadings) return [];
 

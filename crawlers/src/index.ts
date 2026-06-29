@@ -11,8 +11,11 @@ import { logger } from './utils/logger.js';
 
 type CrawlerName = 'clinicaltrials' | 'pubmed' | 'companies' | 'jobs' | 'events' | 'people' | 'all';
 
+// Special CLI commands that aren't crawlers but share the same option slot.
+type Command = CrawlerName | 'stats' | 'report';
+
 interface CrawlOptions {
-  crawler: CrawlerName;
+  crawler: Command;
   query?: string;
   outputDir?: string;
   dryRun?: boolean;
@@ -243,9 +246,9 @@ function parseArgs(): CrawlOptions {
       printHelp();
       process.exit(0);
     } else if (arg === '--stats') {
-      options.crawler = 'stats' as CrawlerName;
+      options.crawler = 'stats';
     } else if (arg === '--report') {
-      options.crawler = 'report' as CrawlerName;
+      options.crawler = 'report';
     }
   }
 
