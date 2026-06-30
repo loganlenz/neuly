@@ -2665,14 +2665,94 @@
       );
     };
 
-    const Footer = () => (
-      <footer style={{ borderTop: '1px solid rgba(255,255,255,0.06)', padding: '60px 40px 40px', position: 'relative', zIndex: 1 }}>
-        <div style={{ maxWidth: '1280px', margin: '0 auto', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '24px' }}>
-          <img src={logoBase64} alt="Neuly" style={{ height: '28px', filter: 'brightness(0) invert(1)' }} />
-          <p style={{ fontSize: '13px', color: '#4a524e' }}>© 2025 Neuly. All rights reserved.</p>
+    // ============================================
+    // LEGAL PAGES
+    // ============================================
+    const LEGAL_DOCS = {
+      disclaimer: {
+        title: 'Medical Disclaimer',
+        updated: 'June 2026',
+        sections: [
+          { p: ["Neuly is an informational and educational research platform. The content on this site — including clinical trial listings, research summaries, company and people profiles, and any AI-generated responses — is provided for general informational purposes only."] },
+          { h: 'Not medical advice', p: ["Nothing on Neuly is intended to be, and should not be taken as, medical advice, diagnosis, or treatment. The information here is not a substitute for the advice of a qualified physician, therapist, or other healthcare professional. Always seek the guidance of a licensed professional with any questions you have about a medical condition or treatment, and never disregard professional advice because of something you read on Neuly."] },
+          { h: 'No professional relationship', p: ["Using Neuly does not create a doctor–patient, therapist–client, or any other professional relationship between you and Neuly or its contributors."] },
+          { h: 'Legal status of substances', p: ["Many of the substances referenced on Neuly are controlled substances whose possession and use are restricted or illegal in many jurisdictions, often outside of authorized clinical research. Neuly does not encourage, endorse, or facilitate any illegal activity or the unsupervised use of any substance. You are responsible for understanding and complying with the laws that apply to you."] },
+          { h: 'Research and data sources', p: ["Trial, publication, and organizational information is aggregated from public, third-party sources such as ClinicalTrials.gov, PubMed, and company disclosures. We do not guarantee that this information is complete, current, or accurate. For authoritative details about any clinical trial or study, consult the original source and a qualified professional."] },
+          { h: 'In an emergency', p: ["If you are experiencing a medical or mental-health emergency, call your local emergency number immediately. In the United States, you can call or text 988 to reach the Suicide and Crisis Lifeline."] }
+        ]
+      },
+      privacy: {
+        title: 'Privacy Policy',
+        updated: 'June 2026',
+        sections: [
+          { p: ["This Privacy Policy explains how Neuly (“Neuly,” “we,” “us”) handles information when you use our website. By using Neuly, you agree to the practices described here."] },
+          { h: 'Information we collect', p: ["Neuly is designed to be browsed without an account. If you choose to contact us or sign up for updates, we collect only the information you provide, such as your name and email address. We may also automatically collect basic technical and usage data — such as your browser type, device, and pages visited — to operate and improve the service."] },
+          { h: 'How we use information', p: ["We use information to provide and maintain the platform, respond to your requests, understand how the service is used, and improve it. We do not sell your personal information."] },
+          { h: 'Data from public sources', p: ["Much of the content on Neuly (trials, publications, companies, and public figures) is compiled from publicly available sources. Profiles of public figures are based on information they or their organizations have made public. If you are featured and would like a correction or removal, contact us."] },
+          { h: 'Cookies and analytics', p: ["Neuly may use cookies or similar technologies and privacy-respecting analytics to understand aggregate usage. You can control cookies through your browser settings."] },
+          { h: 'Data sharing', p: ["We share information only with service providers that help us operate the platform, or where required by law. We do not share your personal information with advertisers."] },
+          { h: 'Security', p: ["We take reasonable measures to protect information, but no method of transmission or storage is completely secure, and we cannot guarantee absolute security."] },
+          { h: 'Children', p: ["Neuly is not directed to children under 16, and we do not knowingly collect personal information from them."] },
+          { h: 'Changes and contact', p: ["We may update this policy from time to time; material changes will be reflected by the “last updated” date above. Questions about privacy can be sent to hello@neuly.com."] }
+        ]
+      },
+      terms: {
+        title: 'Terms of Use',
+        updated: 'June 2026',
+        sections: [
+          { p: ["These Terms of Use govern your access to and use of Neuly. By using the site, you agree to these terms. If you do not agree, please do not use Neuly."] },
+          { h: 'The service', p: ["Neuly provides an informational and educational platform aggregating research, clinical trials, and related content about natural and psychedelic medicine. Features and content may change or be discontinued at any time."] },
+          { h: 'Informational use only', p: ["Neuly is provided for general information and does not constitute medical, legal, financial, or professional advice. Please review our Medical Disclaimer. You are responsible for how you use the information on this site."] },
+          { h: 'No warranty', p: ["Neuly is provided “as is” and “as available,” without warranties of any kind, express or implied, including accuracy, completeness, or fitness for a particular purpose. We do not warrant that the service will be uninterrupted or error-free."] },
+          { h: 'Limitation of liability', p: ["To the fullest extent permitted by law, Neuly and its contributors will not be liable for any indirect, incidental, or consequential damages arising from your use of, or inability to use, the service or any content on it."] },
+          { h: 'Intellectual property', p: ["The Neuly name, design, and original content are owned by Neuly. Third-party data and trademarks remain the property of their respective owners and are used for informational purposes."] },
+          { h: 'Third-party content and links', p: ["Neuly aggregates and links to third-party sources. We are not responsible for the accuracy, policies, or content of those external sources."] },
+          { h: 'Acceptable use', p: ["You agree not to misuse the service, including by attempting to disrupt it, scrape it in violation of these terms, or use it for any unlawful purpose."] },
+          { h: 'Changes and contact', p: ["We may revise these terms; continued use after changes means you accept the revised terms. Questions can be sent to hello@neuly.com."] }
+        ]
+      }
+    };
+
+    const LegalPage = ({ doc, setCurrentPage }) => {
+      const data = LEGAL_DOCS[doc];
+      if (!data) return null;
+      return (
+        <div style={{ position: 'relative', zIndex: 1, maxWidth: '820px', margin: '0 auto', padding: '140px 24px 80px' }}>
+          <h1 style={{ fontFamily: "'Fraunces', serif", fontSize: '40px', fontWeight: 600, color: '#fff', marginBottom: '8px' }}>{data.title}</h1>
+          <p style={{ fontSize: '13px', color: '#6b7370', marginBottom: '40px' }}>Last updated: {data.updated}</p>
+          {data.sections.map((s, i) => (
+            <div key={i} style={{ marginBottom: '28px' }}>
+              {s.h && <h2 style={{ fontSize: '18px', fontWeight: 600, color: '#7dd3c0', marginBottom: '12px' }}>{s.h}</h2>}
+              {s.p.map((para, j) => (
+                <p key={j} style={{ fontSize: '15px', lineHeight: '1.75', color: '#a0a8a4', marginBottom: '12px' }}>{para}</p>
+              ))}
+            </div>
+          ))}
         </div>
-      </footer>
-    );
+      );
+    };
+
+    const Footer = ({ setCurrentPage }) => {
+      const linkStyle = { fontSize: '13px', color: '#6b7370', cursor: 'pointer', transition: 'color 0.2s' };
+      return (
+        <footer style={{ borderTop: '1px solid rgba(255,255,255,0.06)', padding: '48px 40px 40px', position: 'relative', zIndex: 1 }}>
+          <div style={{ maxWidth: '1280px', margin: '0 auto' }}>
+            <p style={{ fontSize: '12px', color: '#4a524e', lineHeight: '1.7', maxWidth: '760px', marginBottom: '28px' }}>
+              Neuly is an informational and educational platform. Content on this site is not medical advice and is not a substitute for care from a qualified professional. Many referenced substances are controlled or illegal in many jurisdictions; Neuly does not encourage unlawful or unsupervised use. See our <span onClick={() => setCurrentPage('disclaimer')} style={{ color: '#7dd3c0', cursor: 'pointer' }}>Medical Disclaimer</span>.
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '24px' }}>
+              <img src={logoBase64} alt="Neuly" style={{ height: '28px', filter: 'brightness(0) invert(1)' }} />
+              <div style={{ display: 'flex', alignItems: 'center', gap: '24px', flexWrap: 'wrap' }}>
+                <span onClick={() => setCurrentPage('disclaimer')} style={linkStyle}>Disclaimer</span>
+                <span onClick={() => setCurrentPage('privacy')} style={linkStyle}>Privacy</span>
+                <span onClick={() => setCurrentPage('terms')} style={linkStyle}>Terms</span>
+                <p style={{ fontSize: '13px', color: '#4a524e' }}>© {new Date().getFullYear()} Neuly. All rights reserved.</p>
+              </div>
+            </div>
+          </div>
+        </footer>
+      );
+    };
 
     // Main App
     const App = () => {
@@ -2680,6 +2760,9 @@
       const [user, setUser] = useState(null);
       const [selectedCompany, setSelectedCompany] = useState(null);
       const [selectedPerson, setSelectedPerson] = useState(null);
+
+      // Scroll to top whenever the page changes (e.g. opening a footer link).
+      useEffect(() => { window.scrollTo(0, 0); }, [currentPage]);
 
       const renderPage = () => {
         switch(currentPage) {
@@ -2718,6 +2801,10 @@
             return <JobsPage user={user} />;
           case 'events':
             return <EventsPage user={user} />;
+          case 'disclaimer':
+          case 'privacy':
+          case 'terms':
+            return <LegalPage doc={currentPage} setCurrentPage={setCurrentPage} />;
           default:
             return <DashboardPage user={user} setCurrentPage={setCurrentPage} />;
         }
@@ -2728,7 +2815,7 @@
           <AmbientBackground />
           <Navigation user={user} setUser={setUser} currentPage={currentPage} setCurrentPage={setCurrentPage} />
           {renderPage()}
-          <Footer />
+          <Footer setCurrentPage={setCurrentPage} />
         </div>
       );
     };
