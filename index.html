@@ -2,7 +2,13 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0a0f0d">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Neuly">
+  <meta name="format-detection" content="telephone=no">
   <title>Neuly - Natural Medicine Research Platform</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
@@ -24,12 +30,112 @@
     ::-webkit-scrollbar { width: 8px; }
     ::-webkit-scrollbar-track { background: #0a0f0d; }
     ::-webkit-scrollbar-thumb { background: rgba(125, 211, 192, 0.3); border-radius: 4px; }
+
+    /* ============ Mobile app chrome (bottom tab bar) ============ */
+    .neuly-tabbar {
+      position: fixed; bottom: 0; left: 0; right: 0; z-index: 200;
+      display: flex; justify-content: space-around; align-items: stretch;
+      gap: 4px; padding: 8px 10px calc(8px + env(safe-area-inset-bottom));
+      background: rgba(12, 17, 15, 0.92);
+      -webkit-backdrop-filter: blur(24px); backdrop-filter: blur(24px);
+      border-top: 1px solid rgba(255,255,255,0.08);
+    }
+    .neuly-tab {
+      flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 3px; padding: 8px 4px; border: none; border-radius: 14px;
+      background: transparent; color: #6b7370; font-family: 'DM Sans', sans-serif;
+      font-size: 10.5px; font-weight: 600; cursor: pointer;
+      -webkit-tap-highlight-color: transparent; transition: background 0.15s, color 0.15s;
+    }
+    .neuly-tab .icon { font-size: 22px; line-height: 1; }
+    .neuly-tab.active { color: #7dd3c0; background: rgba(125, 211, 192, 0.12); }
+    .neuly-tab:active { background: rgba(255,255,255,0.08); }
+
+    .neuly-sheet-backdrop {
+      position: fixed; inset: 0; z-index: 210;
+      background: rgba(0,0,0,0.55);
+      -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px);
+      animation: fadeIn 0.15s;
+    }
+    .neuly-sheet {
+      position: fixed; left: 0; right: 0; bottom: 0; z-index: 220;
+      background: #141918; border-radius: 20px 20px 0 0;
+      border-top: 1px solid rgba(255,255,255,0.1);
+      padding: 10px 16px calc(20px + env(safe-area-inset-bottom));
+      animation: slideUp 0.22s;
+    }
+    .neuly-sheet .grabber { width: 40px; height: 4px; border-radius: 2px; background: rgba(255,255,255,0.2); margin: 4px auto 14px; }
+    .neuly-sheet-item {
+      display: flex; align-items: center; gap: 14px; width: 100%;
+      padding: 14px 12px; border: none; border-radius: 12px; background: transparent;
+      color: #e8ebe9; font-family: 'DM Sans', sans-serif; font-size: 16px; font-weight: 500;
+      cursor: pointer; text-align: left; -webkit-tap-highlight-color: transparent;
+    }
+    .neuly-sheet-item:active { background: rgba(255,255,255,0.06); }
+    .neuly-sheet-item .icon { font-size: 20px; width: 28px; text-align: center; }
+    .neuly-sheet-item.danger { color: #e57373; }
+
+    /* ============ Responsive overrides for inline-styled layout ============ */
+    @media (max-width: 1024px) {
+      /* Stat rows and card grids: 4-5 across -> 2 across */
+      [style*="grid-template-columns: repeat(4, 1fr)"],
+      [style*="grid-template-columns: repeat(5, 1fr)"] { grid-template-columns: repeat(2, 1fr) !important; }
+      /* Two-pane layouts stack */
+      [style*="grid-template-columns: 2fr 1fr"],
+      [style*="grid-template-columns: 1.2fr 0.8fr"] { grid-template-columns: 1fr !important; }
+      /* Wide card minimums shrink to fit */
+      [style*="minmax(380px"] { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)) !important; }
+      /* Fixed-width decorative blocks scale down */
+      [style*="width: 500px"], [style*="width: 600px"],
+      [style*="width: 700px"], [style*="width: 800px"] { width: 100% !important; max-width: 100% !important; }
+      /* Hero: text + floating screenshot stack vertically */
+      [style*="gap: 80px"][style*="display: flex"] { flex-direction: column !important; gap: 48px !important; }
+      [style*="padding: 120px 40px 80px"] { padding: 110px 20px 60px !important; }
+      /* Sidebar + content layouts stack (research agent, dashboard) */
+      [style*="padding-top: 100px"][style*="display: flex"] { flex-direction: column !important; }
+      [style*="width: 280px"][style*="border-right"] {
+        width: 100% !important; height: auto !important; position: static !important;
+        border-right: none !important; border-bottom: 1px solid rgba(255,255,255,0.06);
+      }
+      /* Table-style rows scroll horizontally instead of crushing */
+      [style*="grid-template-columns: 1fr 1fr 120px 120px 100px"] { grid-template-columns: 1fr 1fr !important; }
+    }
+    @media (max-width: 640px) {
+      [style*="grid-template-columns: repeat(3, 1fr)"],
+      [style*="grid-template-columns: 1fr 1fr 1fr"],
+      [style*="grid-template-columns: repeat(2, 1fr)"],
+      [style*="grid-template-columns: 1fr 1fr"] { grid-template-columns: 1fr !important; }
+      [style*="grid-template-columns: repeat(4, 1fr)"],
+      [style*="grid-template-columns: repeat(5, 1fr)"] { grid-template-columns: repeat(2, 1fr) !important; }
+      [style*="minmax(380px"], [style*="minmax(320px"], [style*="minmax(280px"] { grid-template-columns: 1fr !important; }
+      /* Page gutters */
+      [style*="padding: 0 40px"] { padding: 0 20px !important; }
+      /* Display headings scale down */
+      [style*="font-size: 52px"] { font-size: 34px !important; }
+      [style*="font-size: 48px"] { font-size: 32px !important; }
+      [style*="font-size: 42px"] { font-size: 28px !important; }
+      [style*="font-size: 36px"] { font-size: 26px !important; }
+      /* Filter rows wrap cleanly */
+      [style*="min-width: 250px"] { min-width: 100% !important; }
+    }
   </style>
 </head>
 <body>
   <div id="root"></div>
   <script type="text/babel">
     const { useState, useEffect, useRef, createContext, useContext } = React;
+
+    // Mobile/tablet detection — drives the iOS-style app chrome
+    const useIsMobile = () => {
+      const [isMobile, setIsMobile] = useState(() => window.matchMedia('(max-width: 1024px)').matches);
+      useEffect(() => {
+        const mq = window.matchMedia('(max-width: 1024px)');
+        const onChange = (e) => setIsMobile(e.matches);
+        mq.addEventListener ? mq.addEventListener('change', onChange) : mq.addListener(onChange);
+        return () => mq.removeEventListener ? mq.removeEventListener('change', onChange) : mq.removeListener(onChange);
+      }, []);
+      return isMobile;
+    };
 
     // API Configuration - uses relative path when served from the same server
     const API_BASE_URL = (window.location.port === '3001') ? '/api' : 'http://localhost:3001/api';
@@ -173,9 +279,67 @@
       </div>
     );
 
+    // Primary tabs shown as buttons across the bottom on mobile/tablet;
+    // everything else lives in the "More" sheet.
+    const MOBILE_TABS = [
+      ['dashboard', 'Home', '📊'],
+      ['research', 'Research', '🔬'],
+      ['studies', 'Studies', '🧪'],
+      ['care', 'Care', '🏥']
+    ];
+    const MOBILE_MORE_ITEMS = [
+      ['companies', 'Companies', '🏢'],
+      ['people', 'People', '👥'],
+      ['jobs', 'Jobs', '💼'],
+      ['events', 'Events', '📅'],
+      ['education', 'My Courses', '🎓']
+    ];
+
+    const MobileTabBar = ({ user, setUser, currentPage, setCurrentPage }) => {
+      const [sheetOpen, setSheetOpen] = useState(false);
+      const morePages = MOBILE_MORE_ITEMS.map(([page]) => page);
+      const moreActive = sheetOpen || morePages.includes(currentPage);
+
+      const go = (page) => { setCurrentPage(page); setSheetOpen(false); window.scrollTo(0, 0); };
+
+      return (
+        <>
+          {sheetOpen && (
+            <>
+              <div className="neuly-sheet-backdrop" onClick={() => setSheetOpen(false)} />
+              <div className="neuly-sheet">
+                <div className="grabber" />
+                {MOBILE_MORE_ITEMS.map(([page, label, icon]) => (
+                  <button key={page} className="neuly-sheet-item" onClick={() => go(page)}>
+                    <span className="icon">{icon}</span>{label}
+                    {currentPage === page && <span style={{ marginLeft: 'auto', color: '#7dd3c0' }}>●</span>}
+                  </button>
+                ))}
+                <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', margin: '8px 0' }} />
+                <button className="neuly-sheet-item danger" onClick={() => { setUser(null); setCurrentPage('home'); setSheetOpen(false); }}>
+                  <span className="icon">🚪</span>Sign Out
+                </button>
+              </div>
+            </>
+          )}
+          <nav className="neuly-tabbar">
+            {MOBILE_TABS.map(([page, label, icon]) => (
+              <button key={page} className={`neuly-tab${currentPage === page && !sheetOpen ? ' active' : ''}`} onClick={() => go(page)}>
+                <span className="icon">{icon}</span>{label}
+              </button>
+            ))}
+            <button className={`neuly-tab${moreActive ? ' active' : ''}`} onClick={() => setSheetOpen(!sheetOpen)}>
+              <span className="icon">⋯</span>More
+            </button>
+          </nav>
+        </>
+      );
+    };
+
     const Navigation = ({ user, setUser, currentPage, setCurrentPage }) => {
       const [scrolled, setScrolled] = useState(false);
       const [menuOpen, setMenuOpen] = useState(false);
+      const isMobile = useIsMobile();
 
       useEffect(() => {
         const handleScroll = () => setScrolled(window.scrollY > 50);
@@ -183,9 +347,36 @@
         return () => window.removeEventListener('scroll', handleScroll);
       }, []);
 
-      const navItems = user 
+      const navItems = user
         ? [['dashboard', 'Dashboard'], ['research', 'Research'], ['companies', 'Companies'], ['people', 'People'], ['education', 'Education'], ['care', 'Care'], ['studies', 'Studies']]
         : [['research', 'Research'], ['companies', 'Companies'], ['people', 'People'], ['education', 'Education'], ['care', 'Care'], ['studies', 'Studies']];
+
+      // Mobile/tablet, signed in: iPhone-app chrome — slim top header with
+      // the page context, tab buttons across the bottom.
+      if (isMobile && user) {
+        return (
+          <>
+            <nav style={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 100, padding: 'calc(10px + env(safe-area-inset-top)) 20px 10px', backgroundColor: 'rgba(10, 15, 13, 0.95)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)', borderBottom: '1px solid rgba(255,255,255,0.06)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <img src={logoBase64} alt="Neuly" style={{ height: '28px', filter: 'brightness(0) invert(1)', objectFit: 'contain' }} onClick={() => setCurrentPage('dashboard')} />
+              <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'linear-gradient(135deg, #7dd3c0 0%, #a8c5e2 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '14px', fontWeight: 600, color: '#0a0f0d' }}>{user.name.charAt(0)}</div>
+            </nav>
+            <MobileTabBar user={user} setUser={setUser} currentPage={currentPage} setCurrentPage={setCurrentPage} />
+          </>
+        );
+      }
+
+      // Mobile/tablet, signed out: slim marketing header
+      if (isMobile) {
+        return (
+          <nav style={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 100, padding: 'calc(10px + env(safe-area-inset-top)) 20px 10px', backgroundColor: scrolled ? 'rgba(10, 15, 13, 0.95)' : 'transparent', backdropFilter: scrolled ? 'blur(20px)' : 'none', WebkitBackdropFilter: scrolled ? 'blur(20px)' : 'none', transition: 'all 0.3s', borderBottom: scrolled ? '1px solid rgba(255,255,255,0.06)' : 'none', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <img src={logoBase64} alt="Neuly" style={{ height: '28px', filter: 'brightness(0) invert(1)', objectFit: 'contain' }} onClick={() => setCurrentPage('home')} />
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <button onClick={() => setUser({ name: 'Logan', email: 'logan@example.com' })} style={{ background: 'transparent', border: 'none', color: '#e8ebe9', fontSize: '14px', fontWeight: 500, cursor: 'pointer', padding: '10px 12px' }}>Log In</button>
+              <button onClick={() => { setUser({ name: 'Logan', email: 'logan@example.com' }); setCurrentPage('dashboard'); }} style={{ background: '#7dd3c0', border: 'none', color: '#0a0f0d', fontSize: '14px', fontWeight: 600, padding: '10px 18px', borderRadius: '10px', cursor: 'pointer' }}>Join Free</button>
+            </div>
+          </nav>
+        );
+      }
 
       return (
         <nav style={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 100, padding: '16px 0', backgroundColor: scrolled ? 'rgba(10, 15, 13, 0.95)' : 'transparent', backdropFilter: scrolled ? 'blur(20px)' : 'none', transition: 'all 0.3s', borderBottom: scrolled ? '1px solid rgba(255,255,255,0.06)' : 'none' }}>
@@ -2713,12 +2904,15 @@
         }
       };
 
+      const isMobile = useIsMobile();
+      const appMode = Boolean(user) && isMobile;
+
       return (
-        <div style={sharedStyles.container}>
+        <div style={{ ...sharedStyles.container, ...(appMode ? { paddingBottom: 'calc(84px + env(safe-area-inset-bottom))' } : {}) }}>
           <AmbientBackground />
           <Navigation user={user} setUser={setUser} currentPage={currentPage} setCurrentPage={setCurrentPage} />
           {renderPage()}
-          <Footer />
+          {!appMode && <Footer />}
         </div>
       );
     };
@@ -2726,11 +2920,13 @@
     // API Status Indicator Component
     const ApiStatusIndicator = () => {
       const apiData = useApiData();
+      const isMobile = useIsMobile();
       if (!apiData) return null;
 
       const { usingApi, loading } = apiData;
 
-      if (loading) return null;
+      // On mobile/tablet the pill would collide with the bottom tab bar
+      if (loading || isMobile) return null;
 
       return (
         <div style={{
