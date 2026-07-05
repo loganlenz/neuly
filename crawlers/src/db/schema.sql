@@ -108,6 +108,54 @@ CREATE TABLE IF NOT EXISTS crawl_runs (
   ran_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- ============================================
+-- Application tables (auth, billing, alerts, newsletter)
+-- These power the product surface and require the Postgres backend.
+-- ============================================
+
+CREATE TABLE IF NOT EXISTS users (
+  id                 TEXT PRIMARY KEY,
+  email              TEXT NOT NULL UNIQUE,
+  password_hash      TEXT NOT NULL,
+  name               TEXT,
+  plan               TEXT NOT NULL DEFAULT 'free' CHECK (plan IN ('free', 'pro', 'enterprise')),
+  newsletter_opt_in  BOOLEAN NOT NULL DEFAULT true,
+  stripe_customer_id TEXT,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS api_keys (
+  id          TEXT PRIMARY KEY,
+  user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  key_hash    TEXT NOT NULL UNIQUE,
+  label       TEXT,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_used_at TIMESTAMPTZ,
+  revoked_at  TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS alert_subscriptions (
+  id               TEXT PRIMARY KEY,
+  user_id          TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  entity_type      TEXT,          -- null = all entity types
+  keyword          TEXT,          -- null = no keyword filter
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_notified_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS newsletter_issues (
+  id           TEXT PRIMARY KEY,
+  subject      TEXT NOT NULL,
+  html         TEXT NOT NULL,
+  markdown     TEXT NOT NULL,
+  event_count  INTEGER NOT NULL DEFAULT 0,
+  recipients   INTEGER NOT NULL DEFAULT 0,
+  generated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys (user_id);
+CREATE INDEX IF NOT EXISTS idx_alerts_user ON alert_subscriptions (user_id);
+
 CREATE INDEX IF NOT EXISTS idx_trials_data ON clinical_trials USING gin (data);
 CREATE INDEX IF NOT EXISTS idx_papers_data ON research_papers USING gin (data);
 CREATE INDEX IF NOT EXISTS idx_companies_data ON companies USING gin (data);

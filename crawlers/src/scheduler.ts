@@ -2,6 +2,8 @@
 import 'dotenv/config';
 import cron from 'node-cron';
 import { CrawlerOrchestrator, CrawlerName } from './orchestrator.js';
+import { runAlertDispatch } from './alerts/alerts.js';
+import { runNewsletter } from './newsletter/digest.js';
 import { logger } from './utils/logger.js';
 
 interface ScheduleEntry {
@@ -67,6 +69,26 @@ async function main(): Promise<void> {
     });
     logger.info(`  ${entry.crawler.padEnd(16)} ${expression.padEnd(14)} ${entry.description}`);
   }
+
+  // Product jobs: alert emails daily after the morning crawls; the
+  // newsletter digest weekly on Mondays.
+  const alertsCron = process.env.SCHEDULE_ALERTS ?? '0 12 * * *';
+  cron.schedule(alertsCron, () => {
+    queue = queue
+      .then(() => runAlertDispatch(orchestrator.storageBackend))
+      .then(({ sent }) => { logger.info(`[Scheduler] Alert dispatch done (${sent} emails)`); })
+      .catch(error => { logger.error(`[Scheduler] Alert dispatch failed: ${error instanceof Error ? error.message : error}`); });
+  });
+  logger.info(`  ${'alerts'.padEnd(16)} ${alertsCron.padEnd(14)} Alert emails — daily 12:00 UTC`);
+
+  const newsletterCron = process.env.SCHEDULE_NEWSLETTER ?? '0 13 * * 1';
+  cron.schedule(newsletterCron, () => {
+    queue = queue
+      .then(() => runNewsletter(orchestrator.storageBackend))
+      .then(({ recipients, eventCount }) => { logger.info(`[Scheduler] Newsletter done (${eventCount} events, ${recipients} recipients)`); })
+      .catch(error => { logger.error(`[Scheduler] Newsletter failed: ${error instanceof Error ? error.message : error}`); });
+  });
+  logger.info(`  ${'newsletter'.padEnd(16)} ${newsletterCron.padEnd(14)} Weekly digest — Mondays 13:00 UTC`);
 
   if (process.env.RUN_ON_START === 'true') {
     logger.info('[Scheduler] RUN_ON_START=true — running all crawlers now');

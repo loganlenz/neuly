@@ -20,6 +20,16 @@ Data collection system for the Neuly psychedelic medicine research platform. Thi
 - **Diff engine** - Every crawl is compared to the stored state and typed change events (`added` / `updated` / `removed`) are recorded, exposed at `/api/changes`
 - **Scheduler** - `npm run schedule` runs each crawler on its own cron cadence
 
+## Product surface
+
+- **Accounts & plans** - signup/login with session cookies (`/api/auth/*`); free / pro / enterprise plans
+- **Plan gating** - free sees 7 days of change history and a 90-day readout horizon; Pro+ gets full history, full horizon, and CSV export (`/api/export/:type`); Enterprise gets API keys (`/api/keys`, `Authorization: Bearer nk_...`)
+- **Alerts** - saved subscriptions (`/api/alerts`, entity type + keyword) matched daily against the change log and emailed
+- **Newsletter** - auto-generated weekly digest (changes by section + upcoming readouts), archived in `newsletter_issues` and sent to opted-in users
+- **Email delivery** - Resend when `RESEND_API_KEY` is set; otherwise messages land in `data/outbox/` (dev-friendly)
+- **Billing** - Stripe Checkout + signature-verified webhook + customer portal, enabled by the `STRIPE_*` env vars
+- **Programmatic SEO pages** - server-rendered, crawlable pages generated from the database: `/substances/:slug`, `/trials/:nctId`, `/company-profiles/:slug`, `/policy/:jurisdiction`, `/readouts-calendar`, plus `robots.txt` and `sitemap.xml`
+
 ## Installation
 
 ```bash

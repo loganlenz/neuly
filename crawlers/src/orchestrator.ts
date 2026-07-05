@@ -64,6 +64,11 @@ export class CrawlerOrchestrator {
     return this.storage.label;
   }
 
+  /** Shared backend for jobs that read the change log (alerts, newsletter) */
+  get storageBackend(): StorageBackend {
+    return this.storage;
+  }
+
   async close(): Promise<void> {
     await this.storage.close();
   }

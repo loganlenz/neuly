@@ -7,6 +7,12 @@ import { fileURLToPath } from 'url';
 import { existsSync } from 'fs';
 import { DataType } from './utils/storage.js';
 import { createStorage } from './utils/storageBackend.js';
+import { attachUser, authRouter, apiKeysRouter, requirePlan, AuthedRequest } from './auth/auth.js';
+import { alertsRouter } from './alerts/alerts.js';
+import { billingRouter, handleStripeWebhook } from './billing/stripe.js';
+import { seoRouter } from './web/seoPages.js';
+import { clampChangesSince, clampReadoutHorizon, toCsv } from './web/gating.js';
+import { ALL_DATA_TYPES } from './utils/storage.js';
 import { logger } from './utils/logger.js';
 import {
   ClinicalTrial,
@@ -32,7 +38,11 @@ const storage = await createStorage();
 
 // Middleware
 app.use(cors());
+// Stripe webhook needs the raw bytes for signature verification, so it is
+// mounted before the JSON body parser.
+app.post('/api/billing/webhook', express.raw({ type: 'application/json' }), handleStripeWebhook);
 app.use(express.json());
+app.use(attachUser());
 
 // Serve the frontend (index.html) from the project root
 const projectRoot = join(__dirname, '..', '..');
@@ -618,6 +628,35 @@ app.get('/api/search', async (req: Request, res: Response) => {
 });
 
 // ============================================
+// ACCOUNTS, ALERTS, BILLING, SEO PAGES
+// ============================================
+
+app.use('/api/auth', authRouter());
+app.use('/api/keys', apiKeysRouter());
+app.use('/api/alerts', alertsRouter());
+app.use('/api/billing', billingRouter());
+app.use(seoRouter(storage));
+
+/**
+ * CSV export of any dataset — Pro and Enterprise plans.
+ */
+app.get('/api/export/:type', requirePlan('pro', 'enterprise'), async (req: AuthedRequest, res: Response) => {
+  const type = req.params.type as DataType;
+  if (!ALL_DATA_TYPES.includes(type)) {
+    return res.status(400).json({ error: `Unknown dataset. Available: ${ALL_DATA_TYPES.join(', ')}` });
+  }
+  try {
+    const rows = await storage.load(type);
+    res.type('text/csv')
+      .setHeader('Content-Disposition', `attachment; filename="neuly_${type}.csv"`)
+      .send(toCsv(rows));
+  } catch (error) {
+    logger.error(`Error exporting ${type}: ${error}`);
+    res.status(500).json({ error: 'Export failed' });
+  }
+});
+
+// ============================================
 // LEGISLATION / FUNDING / GRANTS / READOUTS
 // ============================================
 
@@ -753,11 +792,12 @@ app.get('/api/grants', async (req: Request, res: Response) => {
  * clinical trial completion dates, soonest first.
  * Query params: phase, substance, horizonDays, limit
  */
-app.get('/api/readouts', async (req: Request, res: Response) => {
+app.get('/api/readouts', async (req: AuthedRequest, res: Response) => {
   try {
     const trials = await storage.load<ClinicalTrial>('clinical_trials');
+    // Free/anonymous users see a 90-day horizon; Pro+ the full calendar
     let readouts = deriveReadoutCalendar(trials, {
-      horizonDays: parseInt(req.query.horizonDays as string) || undefined
+      horizonDays: clampReadoutHorizon(req.user?.plan, parseInt(req.query.horizonDays as string) || undefined)
     });
 
     if (req.query.phase) {
@@ -781,11 +821,12 @@ app.get('/api/readouts', async (req: Request, res: Response) => {
  * Recent change events (diff engine output): what's new, updated, removed.
  * Query params: type (entity type), since (ISO timestamp), limit
  */
-app.get('/api/changes', async (req: Request, res: Response) => {
+app.get('/api/changes', async (req: AuthedRequest, res: Response) => {
   try {
+    // Free/anonymous users see the last 7 days; Pro+ the full history
     const events = await storage.loadChangeEvents({
       entityType: req.query.type as string | undefined,
-      since: req.query.since as string | undefined,
+      since: clampChangesSince(req.user?.plan, req.query.since as string | undefined),
       limit: parseInt(req.query.limit as string) || 100
     });
     res.json({ data: events, total: events.length });
