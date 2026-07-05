@@ -1,0 +1,6 @@
+.git
+crawlers/node_modules
+crawlers/data
+crawlers/logs
+crawlers/.env
+*.md

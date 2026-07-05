@@ -10,9 +10,10 @@
   <meta name="apple-mobile-web-app-title" content="Neuly">
   <meta name="format-detection" content="telephone=no">
   <title>Neuly - Natural Medicine Research Platform</title>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+  <!-- Vendored locally (see /vendor) so the app has no third-party CDN dependency -->
+  <script src="vendor/react.production.min.js"></script>
+  <script src="vendor/react-dom.production.min.js"></script>
+  <script src="vendor/babel.min.js"></script>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -137,8 +138,9 @@
       return isMobile;
     };
 
-    // API Configuration - uses relative path when served from the same server
-    const API_BASE_URL = (window.location.port === '3001') ? '/api' : 'http://localhost:3001/api';
+    // API Configuration — same-origin in production (the Express server serves
+    // this file and /api together); localhost only when opened as a local file.
+    const API_BASE_URL = window.location.protocol === 'file:' ? 'http://localhost:3001/api' : '/api';
 
     // API Helper Functions
     const api = {
@@ -210,45 +212,59 @@
       });
 
       useEffect(() => {
+        let cancelled = false;
+        let attempt = 0;
+
         const fetchData = async () => {
           try {
             const dashboard = await api.getDashboard();
-            if (dashboard && dashboard.counts) {
-              // API is available, fetch all data
-              const [companiesRes, peopleRes, trialsRes, papersRes, jobsRes, eventsRes] = await Promise.all([
-                api.getCompanies(),
-                api.getPeople(),
-                api.getClinicalTrials(),
-                api.getResearchPapers(),
-                api.getJobs(),
-                api.getEvents()
-              ]);
+            if (!dashboard || !dashboard.counts) throw new Error('API unreachable');
 
-              setApiData({
-                companies: companiesRes?.data || [],
-                people: peopleRes?.data || [],
-                clinicalTrials: trialsRes?.data || [],
-                researchPapers: papersRes?.data || [],
-                jobs: jobsRes?.data || [],
-                events: eventsRes?.data || [],
-                stats: dashboard,
-                loading: false,
-                error: null,
-                usingApi: true
-              });
-              console.log('✅ Connected to Neuly API - using live data');
-            } else {
-              // API not available, use fallback data
-              setApiData(prev => ({ ...prev, loading: false, usingApi: false }));
-              console.log('ℹ️ API not available - using static data');
-            }
+            const [companiesRes, peopleRes, trialsRes, papersRes, jobsRes, eventsRes] = await Promise.all([
+              api.getCompanies({ limit: 500 }),
+              api.getPeople({ limit: 500 }),
+              api.getClinicalTrials({ limit: 500 }),
+              api.getResearchPapers({ limit: 500 }),
+              api.getJobs({ limit: 500 }),
+              api.getEvents({ limit: 500 })
+            ]);
+            if (cancelled) return true;
+
+            setApiData({
+              companies: companiesRes?.data || [],
+              people: peopleRes?.data || [],
+              clinicalTrials: trialsRes?.data || [],
+              researchPapers: papersRes?.data || [],
+              jobs: jobsRes?.data || [],
+              events: eventsRes?.data || [],
+              stats: dashboard,
+              loading: false,
+              error: null,
+              usingApi: true
+            });
+            console.log('✅ Connected to Neuly API - using live data');
+            return true;
           } catch (error) {
-            console.log('ℹ️ API not available - using static data');
-            setApiData(prev => ({ ...prev, loading: false, error: error.message, usingApi: false }));
+            if (!cancelled) {
+              setApiData(prev => ({ ...prev, loading: false, error: error.message, usingApi: false }));
+            }
+            return false;
           }
         };
 
-        fetchData();
+        // Keep retrying with backoff until the API answers — the data layer
+        // is the product, so there is no static fallback.
+        const run = async () => {
+          const ok = await fetchData();
+          if (!ok && !cancelled) {
+            attempt += 1;
+            const delay = Math.min(15000, 2000 * attempt);
+            console.log(`⏳ API not reachable, retrying in ${delay / 1000}s`);
+            setTimeout(run, delay);
+          }
+        };
+        run();
+        return () => { cancelled = true; };
       }, []);
 
       return React.createElement(DataContext.Provider, { value: apiData }, children);
@@ -269,7 +285,153 @@
       buttonDark: { padding: '16px 32px', fontSize: '15px', fontWeight: 600, background: '#1a1f1d', color: '#fff', border: 'none', borderRadius: '30px', cursor: 'pointer' },
     };
 
-    const substanceColors = { 'Psilocybin': '#7dd3c0', 'MDMA': '#f0b775', 'Ketamine': '#a8c5e2', 'LSD': '#d4a5c9', 'Ayahuasca': '#98d4a0', 'Ibogaine': '#98d4a0', 'Cannabis': '#e8c898', 'All': '#7dd3c0', 'All Research': '#7dd3c0', 'Multiple': '#a8c5e2' };
+    const substanceColors = { 'Psilocybin': '#7dd3c0', 'MDMA': '#f0b775', 'Ketamine': '#a8c5e2', 'LSD': '#d4a5c9', 'Ayahuasca': '#98d4a0', 'Ibogaine': '#98d4a0', 'DMT': '#e8c898', '5-MeO-DMT': '#e8c898', 'Mescaline': '#d4a5c9', 'Cannabis': '#e8c898', 'All': '#7dd3c0', 'All Research': '#7dd3c0', 'Multiple': '#a8c5e2' };
+    const subColor = (sub) => substanceColors[sub] || '#98d4a0';
+
+    // ============================================================
+    // Live-data normalizers — map API records (see crawlers/src/models/types.ts)
+    // onto the display shapes the page components render.
+    // ============================================================
+    const fmtLocation = (loc) => {
+      if (!loc) return '—';
+      if (typeof loc === 'string') return loc;
+      const parts = [loc.facility || loc.venue, loc.city, loc.state, loc.country].filter(Boolean);
+      if (loc.remote) parts.push('Remote');
+      return parts.length ? parts.join(', ') : '—';
+    };
+
+    const pickEmoji = (seed, set) => {
+      let h = 7;
+      for (const ch of String(seed || '')) h = (h * 31 + ch.charCodeAt(0)) | 0;
+      return set[Math.abs(h) % set.length];
+    };
+    const COMPANY_EMOJIS = ['🧬', '🔬', '💊', '🌿', '🧠', '⚗️', '🌱', '✨', '🍄', '🔭'];
+    const ROLE_EMOJIS = { 'Researcher': '🧑‍🔬', 'Executive': '💼', 'Clinician': '🩺', 'Advocate': '📣', 'Investor': '📈', 'Founder': '🚀' };
+    const EVENT_EMOJIS = { 'Conference': '🌐', 'Webinar': '🎙️', 'Workshop': '🛠️', 'Summit': '📈', 'Meetup': '🔄' };
+    const CURRENCY_SYMBOLS = { USD: '$', GBP: '£', EUR: '€', CAD: 'CA$', AUD: 'AU$' };
+
+    const fmtSalary = (r) => {
+      if (!r || (r.min == null && r.max == null)) return 'Competitive';
+      const sym = CURRENCY_SYMBOLS[r.currency] || '$';
+      const k = (n) => `${sym}${Math.round(n / 1000)}K`;
+      if (r.min != null && r.max != null) return `${k(r.min)} - ${k(r.max)}`;
+      return k(r.min != null ? r.min : r.max);
+    };
+
+    const timeAgo = (dateStr) => {
+      if (!dateStr) return 'Recently';
+      const days = Math.max(0, Math.floor((Date.now() - new Date(dateStr).getTime()) / 86400000));
+      if (days === 0) return 'Today';
+      if (days === 1) return '1 day ago';
+      if (days < 7) return `${days} days ago`;
+      if (days < 30) { const w = Math.floor(days / 7); return `${w} week${w > 1 ? 's' : ''} ago`; }
+      const m = Math.floor(days / 30);
+      return `${m} month${m > 1 ? 's' : ''} ago`;
+    };
+
+    const normalizeCompany = (c) => ({
+      id: c.id || c.name,
+      name: c.name,
+      type: c.type || 'Biotech',
+      stage: c.stage || 'Private',
+      ticker: c.ticker,
+      founded: c.founded || '—',
+      hq: fmtLocation(c.headquarters),
+      employees: c.employeeCount || '—',
+      substances: c.substances || [],
+      description: c.description || '',
+      focus: c.focus || '—',
+      funding: (typeof c.funding === 'string' ? c.funding : c.funding && c.funding.total) || '—',
+      website: (c.website || '').replace(/^https?:\/\//, '') || '—',
+      logo: pickEmoji(c.name, COMPANY_EMOJIS),
+      pipeline: (c.pipeline || []).map(p => ({
+        name: p.drugName || p.name || '—',
+        phase: p.phase || '—',
+        indication: p.indication || '—',
+        status: p.status || 'Active',
+        expectedCompletion: p.expectedCompletion || ''
+      })),
+      news: c.news || [],
+      team: (c.team || c.leadership || []).map(m => ({ name: m.name, role: m.role || m.title || '' }))
+    });
+
+    const normalizePerson = (p) => ({
+      id: p.id || p.name,
+      name: p.name,
+      role: p.role || 'Researcher',
+      title: p.title || p.role || '',
+      org: p.organization || p.org || '—',
+      location: fmtLocation(p.location),
+      bio: p.bio || '',
+      expertise: p.expertise || [],
+      papers: (p.publications && p.publications.count) != null ? p.publications.count : '—',
+      citations: (p.publications && p.publications.citations) != null ? p.publications.citations.toLocaleString() + '+' : '—',
+      image: ROLE_EMOJIS[p.role] || '👤'
+    });
+
+    const normalizeStudy = (t) => {
+      const substance = (t.substances && t.substances[0]) || 'Multiple';
+      const rawStatus = t.status || '';
+      const status = /recruit/i.test(rawStatus) ? 'Recruiting' : /complet/i.test(rawStatus) ? 'Completed' : 'Active';
+      const locs = t.locations || [];
+      const location = locs.length > 1 ? `${locs.length} sites` : locs.length === 1 ? fmtLocation(locs[0]) : '—';
+      return {
+        id: t.id || t.nctId,
+        substance,
+        color: subColor(substance),
+        title: t.title,
+        sponsor: t.sponsor || '—',
+        phase: t.phase || 'N/A',
+        status,
+        location,
+        enrollment: t.enrollment || '—',
+        nctId: t.nctId,
+        url: t.url
+      };
+    };
+
+    const normalizeJob = (j) => ({
+      id: j.id,
+      title: j.title,
+      company: j.company,
+      companyLogo: pickEmoji(j.company, COMPANY_EMOJIS),
+      type: j.type || 'Research',
+      // ATS data often omits the country for US postings; a two-letter state
+      // code implies United States so the location filter can match it.
+      location: fmtLocation(j.location) + (j.location && j.location.state && !j.location.country ? ', United States' : ''),
+      salary: fmtSalary(j.salaryRange),
+      posted: timeAgo(j.postedDate),
+      description: j.description || '',
+      url: j.sourceUrl
+    });
+
+    const fmtEventDate = (e) => {
+      if (!e.startDate) return 'TBA';
+      const opts = { month: 'short', day: 'numeric' };
+      const start = new Date(e.startDate + 'T12:00:00');
+      const year = start.getFullYear();
+      if (e.endDate && e.endDate !== e.startDate) {
+        const end = new Date(e.endDate + 'T12:00:00');
+        return `${start.toLocaleDateString('en-US', opts)} - ${end.toLocaleDateString('en-US', opts)}, ${year}`;
+      }
+      return `${start.toLocaleDateString('en-US', opts)}, ${year}`;
+    };
+
+    const normalizeEvent = (e) => ({
+      id: e.id,
+      title: e.title,
+      type: e.type || 'Conference',
+      format: e.format || 'In-Person',
+      date: fmtEventDate(e),
+      location: e.format === 'Virtual' ? 'Online' : fmtLocation(e.location),
+      host: e.organizer || '—',
+      description: e.description || '',
+      price: e.price ? (e.price.isFree ? 'Free' : e.price.amount != null ? `${CURRENCY_SYMBOLS[e.price.currency] || '$'}${e.price.amount}+` : 'TBA') : 'TBA',
+      image: EVENT_EMOJIS[e.type] || '📅',
+      featured: (e.expectedAttendees || 0) >= 1000,
+      attendees: e.expectedAttendees ? e.expectedAttendees.toLocaleString() + '+' : '—',
+      website: e.website || e.registrationUrl
+    });
 
     const AmbientBackground = () => (
       <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, pointerEvents: 'none', zIndex: 0, overflow: 'hidden' }}>
@@ -459,6 +621,27 @@
       </div>
     );
 
+    // Live counts for the marketing hero — real numbers from the database
+    const HeroStats = () => {
+      const apiData = useApiData();
+      const counts = apiData?.stats?.counts;
+      const fmt = (n) => n != null ? n.toLocaleString() : '—';
+      return (
+        <div style={{ display: 'flex', gap: '40px', flexWrap: 'wrap' }}>
+          {[
+            { value: fmt(counts?.clinicalTrials), label: 'Clinical Studies' },
+            { value: fmt(counts?.researchPapers), label: 'Research Papers' },
+            { value: fmt(counts?.companies), label: 'Companies Tracked' }
+          ].map((stat, i) => (
+            <div key={i}>
+              <div style={{ fontFamily: '"Fraunces", serif', fontSize: '32px', fontWeight: 600, color: '#fff', marginBottom: '2px' }}>{stat.value}</div>
+              <div style={{ fontSize: '13px', color: '#6b7370', fontWeight: 500 }}>{stat.label}</div>
+            </div>
+          ))}
+        </div>
+      );
+    };
+
     // Hero Section
     const HeroSection = ({ setCurrentPage, setUser }) => (
       <section style={{ position: 'relative', zIndex: 1, minHeight: '100vh', display: 'flex', alignItems: 'center', padding: '120px 40px 80px', maxWidth: '1400px', margin: '0 auto' }}>
@@ -480,14 +663,7 @@
               <button onClick={() => { setUser({ name: 'Logan', email: 'logan@example.com' }); setCurrentPage('dashboard'); }} style={sharedStyles.button}>Get Started Free</button>
               <button onClick={() => setCurrentPage('research')} style={sharedStyles.buttonOutline}>Explore Research</button>
             </div>
-            <div style={{ display: 'flex', gap: '40px', flexWrap: 'wrap' }}>
-              {[{ value: '2,400+', label: 'Active Studies' }, { value: '12,450+', label: 'Research Papers' }, { value: '15,000+', label: 'Members' }].map((stat, i) => (
-                <div key={i}>
-                  <div style={{ fontFamily: '"Fraunces", serif', fontSize: '32px', fontWeight: 600, color: '#fff', marginBottom: '2px' }}>{stat.value}</div>
-                  <div style={{ fontSize: '13px', color: '#6b7370', fontWeight: 500 }}>{stat.label}</div>
-                </div>
-              ))}
-            </div>
+            <HeroStats />
           </div>
           <div style={{ flex: 1, display: 'flex', justifyContent: 'center' }}>
             <PlatformScreenshot />
@@ -705,16 +881,11 @@
       ];
 
       // Use API data for stats if available, otherwise use sample data
-      const weeklyStats = usingApi && stats?.counts ? [
-        { label: 'Clinical Trials', value: stats.counts.clinicalTrials || 0, change: 'live', up: true },
-        { label: 'Research Papers', value: stats.counts.researchPapers || 0, change: 'live', up: true },
-        { label: 'Companies', value: stats.counts.companies || 0, change: 'live', up: true },
-        { label: 'People', value: stats.counts.people || 0, change: 'live', up: true },
-      ] : [
-        { label: 'Research Queries', value: 12, change: '+4', up: true },
-        { label: 'Companies Viewed', value: 8, change: '+2', up: true },
-        { label: 'Course Progress', value: '75%', change: '+15%', up: true },
-        { label: 'People Followed', value: 6, change: '+3', up: true },
+      const weeklyStats = [
+        { label: 'Clinical Trials', value: stats?.counts?.clinicalTrials ?? '—', change: 'live', up: true },
+        { label: 'Research Papers', value: stats?.counts?.researchPapers ?? '—', change: 'live', up: true },
+        { label: 'Companies', value: stats?.counts?.companies ?? '—', change: 'live', up: true },
+        { label: 'People', value: stats?.counts?.people ?? '—', change: 'live', up: true },
       ];
 
       return (
@@ -773,10 +944,10 @@
                 <h2 style={{ fontSize: '18px', fontWeight: 600, color: '#fff', marginBottom: '24px' }}>Platform Overview</h2>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
                   {[
-                    { value: '150+', label: 'Companies', icon: '🏢', color: '#7dd3c0' },
-                    { value: '500+', label: 'People', icon: '👥', color: '#d4a5c9' },
-                    { value: '2,400+', label: 'Clinical Studies', icon: '🧪', color: '#f0b775' },
-                    { value: '12,450+', label: 'Research Papers', icon: '📄', color: '#a8c5e2' },
+                    { value: String(stats?.counts?.companies ?? '—'), label: 'Companies', icon: '🏢', color: '#7dd3c0' },
+                    { value: String(stats?.counts?.people ?? '—'), label: 'People', icon: '👥', color: '#d4a5c9' },
+                    { value: String(stats?.counts?.clinicalTrials ?? '—'), label: 'Clinical Studies', icon: '🧪', color: '#f0b775' },
+                    { value: String(stats?.counts?.researchPapers ?? '—'), label: 'Research Papers', icon: '📄', color: '#a8c5e2' },
                   ].map((stat, i) => (
                     <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '16px', background: 'rgba(255,255,255,0.02)', borderRadius: '12px' }}>
                       <div style={{ width: '44px', height: '44px', borderRadius: '12px', background: `${stat.color}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px' }}>{stat.icon}</div>
@@ -855,372 +1026,8 @@
       const types = ['All', 'Biotech', 'Healthcare', 'Technology', 'Research', 'Media', 'Services'];
       const substances = ['All', 'Psilocybin', 'MDMA', 'Ketamine', 'LSD', 'Ibogaine', 'Multiple'];
 
-      const companies = [
-        { id: 1, name: 'COMPASS Pathways', type: 'Biotech', stage: 'Public', ticker: 'CMPS', founded: 2016, hq: 'London, UK', employees: '150+', substances: ['Psilocybin'], description: 'COMPASS Pathways is a mental health care company dedicated to accelerating patient access to evidence-based innovation in mental health. Their lead program, COMP360, is a proprietary psilocybin therapy being evaluated in Phase 3 clinical trials for treatment-resistant depression, with additional studies for PTSD and anorexia nervosa.', focus: 'Treatment-resistant depression', funding: '$240M+', website: 'compasspathways.com', logo: '🧭',
-          pipeline: [
-            { name: 'COMP360', phase: 'Phase 3', indication: 'Treatment-Resistant Depression', status: 'Active', startDate: '2022', expectedCompletion: '2025' },
-            { name: 'COMP360', phase: 'Phase 2', indication: 'PTSD', status: 'Recruiting', startDate: '2023', expectedCompletion: '2026' },
-            { name: 'COMP360', phase: 'Phase 2', indication: 'Anorexia Nervosa', status: 'Active', startDate: '2023', expectedCompletion: '2026' }
-          ],
-          news: [
-            { title: 'Positive Topline Results from First Phase 3 Study in TRD', date: 'Jun 2025', type: 'Clinical' },
-            { title: 'Second Phase 3 Study Results Expected H2 2026', date: 'Nov 2024', type: 'Clinical' },
-            { title: 'Exploratory Study Shows COMP360 Works with SSRI Medications', date: 'Oct 2024', type: 'Clinical' }
-          ],
-          team: [
-            { name: 'George Goldsmith', role: 'Co-Founder & CEO', id: 8 },
-            { name: 'Ekaterina Malievskaia, MD', role: 'Co-Founder & CMO', id: 4 }
-          ]
-        },
-        { id: 2, name: 'Lykos Therapeutics (MAPS PBC)', type: 'Non-Profit/PBC', stage: 'Private', ticker: null, founded: 1986, hq: 'San Jose, CA', employees: '100+', substances: ['MDMA'], description: 'Lykos Therapeutics, the for-profit arm of MAPS (Multidisciplinary Association for Psychedelic Studies), has pioneered MDMA-assisted therapy for PTSD. After 38 years of advocacy and research, they completed Phase 3 trials showing 67% of participants no longer met PTSD criteria. FDA requested an additional trial after their 2024 review.', focus: 'PTSD treatment', funding: '$100M+ (donations & investments)', website: 'lfrx.com', logo: '🗺️',
-          pipeline: [
-            { name: 'MDMA-AT', phase: 'Phase 3', indication: 'PTSD', status: 'Complete', startDate: '2018', expectedCompletion: '2024' },
-            { name: 'MDMA-AT', phase: 'Phase 3b', indication: 'PTSD (Additional Trial)', status: 'Planning', startDate: '2025', expectedCompletion: '2027' }
-          ],
-          news: [
-            { title: 'FDA Issues Complete Response Letter, Requests Additional Trial', date: 'Aug 2024', type: 'Regulatory' },
-            { title: 'Phase 3 Results Published in Nature Medicine', date: 'Sep 2023', type: 'Clinical' },
-            { title: 'Company Restructures, Reduces Staff 75%', date: 'Oct 2024', type: 'Business' }
-          ],
-          team: [
-            { name: 'Rick Doblin, PhD', role: 'Founder', id: 2 }
-          ]
-        },
-        { id: 3, name: 'Atai Life Sciences', type: 'Biotech', stage: 'Public', ticker: 'ATAI', founded: 2018, hq: 'Berlin, Germany', employees: '200+', substances: ['Multiple'], description: 'Atai Life Sciences is a clinical-stage biopharmaceutical company with a hub-and-spoke model, developing multiple psychedelic and non-psychedelic compounds through strategic investments and subsidiaries. They hold ~20% of COMPASS Pathways and recently announced a merger with Beckley Psytech.', focus: 'Multiple mental health indications', funding: '$360M+', website: 'atai.life', logo: '🔬',
-          pipeline: [
-            { name: 'PCN-101 (R-ketamine)', phase: 'Phase 2', indication: 'Treatment-Resistant Depression', status: 'Active', startDate: '2022', expectedCompletion: '2025' },
-            { name: 'BPL-003 (Psilocybin)', phase: 'Phase 2b', indication: 'Treatment-Resistant Depression', status: 'Complete', startDate: '2023', expectedCompletion: '2024' },
-            { name: 'VLS-01 (DMT)', phase: 'Phase 2', indication: 'Treatment-Resistant Depression', status: 'Active', startDate: '2023', expectedCompletion: '2025' },
-            { name: 'ELE-101', phase: 'Phase 2', indication: 'Major Depressive Disorder', status: 'Active', startDate: '2023', expectedCompletion: '2025' },
-            { name: 'RL-007', phase: 'Phase 2', indication: 'Cognitive Impairment in Schizophrenia', status: 'Recruiting', startDate: '2023', expectedCompletion: '2026' },
-            { name: 'TRP-8802 (Ibogaine)', phase: 'Phase 1', indication: 'Opioid Use Disorder', status: 'Active', startDate: '2023', expectedCompletion: '2025' }
-          ],
-          news: [
-            { title: 'Merger Agreement with Beckley Psytech Announced', date: 'Jun 2024', type: 'Business' },
-            { title: 'BPL-003 Phase 2b Meets Primary Endpoints', date: 'Jul 2024', type: 'Clinical' },
-            { title: 'Partnership with Otsuka Pharmaceutical for R-ketamine in Japan', date: 'Sep 2023', type: 'Business' }
-          ],
-          team: [
-            { name: 'Florian Brand', role: 'Co-Founder & CEO', id: 6 }
-          ]
-        },
-        { id: 4, name: 'MindMed', type: 'Biotech', stage: 'Public', ticker: 'MNMD', founded: 2019, hq: 'New York, NY', employees: '80+', substances: ['LSD'], description: 'MindMed (Mind Medicine Inc.) is developing next-generation psychedelic medicines, with its lead candidate MM120, an optimized form of LSD for generalized anxiety disorder. The company received FDA Breakthrough Therapy Designation in 2024 and is currently in Phase 3 trials.', focus: 'Generalized anxiety disorder', funding: '$200M+', website: 'mindmed.co', logo: '💭',
-          pipeline: [
-            { name: 'MM120 (LSD)', phase: 'Phase 3', indication: 'Generalized Anxiety Disorder', status: 'Active', startDate: '2024', expectedCompletion: '2026' },
-            { name: 'MM120 (LSD)', phase: 'Phase 3', indication: 'Major Depressive Disorder', status: 'Recruiting', startDate: '2024', expectedCompletion: '2026' },
-            { name: 'MM402 (R-MDMA)', phase: 'Phase 1', indication: 'Autism Spectrum Disorder', status: 'Active', startDate: '2023', expectedCompletion: '2025' }
-          ],
-          news: [
-            { title: 'First Patient Dosed in Second Phase 3 GAD Trial', date: 'Jan 2025', type: 'Clinical' },
-            { title: 'FDA Grants Breakthrough Therapy Designation for MM120', date: 'Mar 2024', type: 'Regulatory' },
-            { title: 'Robert Barrow Appointed Permanent CEO', date: 'Dec 2023', type: 'Business' }
-          ],
-          team: [
-            { name: 'Robert Barrow', role: 'CEO', id: 12 }
-          ]
-        },
-        { id: 5, name: 'Cybin Inc.', type: 'Biotech', stage: 'Public', ticker: 'CYBN', founded: 2019, hq: 'Toronto, Canada', employees: '80+', substances: ['Psilocybin', 'DMT'], description: 'Cybin is a biotechnology company developing psychedelic therapeutics using proprietary deuteration and drug delivery technologies. Their lead candidate CYB003 is a deuterated psilocybin analog in Phase 3 for major depressive disorder. CYB004 is a deuterated DMT in Phase 2 for anxiety.', focus: 'Major depressive disorder', funding: '$150M+', website: 'cybin.com', logo: '🧬',
-          pipeline: [
-            { name: 'CYB003 (Deuterated Psilocybin)', phase: 'Phase 3', indication: 'Major Depressive Disorder', status: 'Active', startDate: '2024', expectedCompletion: '2026' },
-            { name: 'CYB004 (Deuterated DMT)', phase: 'Phase 2', indication: 'Generalized Anxiety Disorder', status: 'Active', startDate: '2023', expectedCompletion: '2025' }
-          ],
-          news: [
-            { title: 'FDA Grants Breakthrough Therapy Designation for CYB003', date: 'Mar 2024', type: 'Regulatory' },
-            { title: 'Phase 3 Trial Initiated with 30+ Sites', date: 'Aug 2024', type: 'Clinical' },
-            { title: 'Positive Phase 2 Results for CYB003', date: 'Jun 2024', type: 'Clinical' }
-          ],
-          team: [
-            { name: 'Doug Drysdale', role: 'CEO', id: 11 }
-          ]
-        },
-        { id: 6, name: 'Numinus Wellness', type: 'Healthcare', stage: 'Public', ticker: 'NUMI', founded: 2018, hq: 'Vancouver, Canada', employees: '100+', substances: ['Psilocybin', 'Ketamine', 'MDMA'], description: 'Numinus Wellness operates a network of mental health clinics offering ketamine-assisted therapy and is positioned to deliver psychedelic-assisted therapies upon approval. They partnered with MAPS for therapist training and serve as a clinical trial site.', focus: 'Mental health treatment access', funding: '$80M+', website: 'numinus.com', logo: '✨',
-          pipeline: [],
-          news: [
-            { title: 'Selected as Clinical Site for MAPS MDMA Trial', date: 'Oct 2024', type: 'Clinical' },
-            { title: 'Expanded Clinic Network to 8 Locations', date: 'Sep 2024', type: 'Business' },
-            { title: 'Partnership with Novamind for Research Collaboration', date: 'Aug 2024', type: 'Business' }
-          ],
-          team: []
-        },
-        { id: 7, name: 'Beckley Psytech', type: 'Biotech', stage: 'Series B', ticker: null, founded: 2019, hq: 'Oxford, UK', employees: '50+', substances: ['Psilocybin', '5-MeO-DMT'], description: 'Beckley Psytech, founded by Amanda Feilding, is developing psychedelic medicines for neurological and psychiatric conditions. Their lead candidate BPL-003 showed positive Phase 2b results. The company is merging with Atai Life Sciences in 2025.', focus: 'Treatment-resistant depression', funding: '$80M+', website: 'beckleypsytech.com', logo: '🔮',
-          pipeline: [
-            { name: 'BPL-003 (Psilocybin)', phase: 'Phase 2b', indication: 'Treatment-Resistant Depression', status: 'Complete', startDate: '2023', expectedCompletion: '2024' },
-            { name: '5-MeO-DMT', phase: 'Phase 1', indication: 'Treatment-Resistant Depression', status: 'Planning', startDate: '2025', expectedCompletion: '2027' }
-          ],
-          news: [
-            { title: 'BPL-003 Phase 2b Meets Primary and Secondary Endpoints', date: 'Jul 2024', type: 'Clinical' },
-            { title: 'Definitive Merger Agreement with Atai Announced', date: 'Jun 2024', type: 'Business' },
-            { title: 'Series B Funding Round Closed at $80M', date: 'Oct 2023', type: 'Business' }
-          ],
-          team: [
-            { name: 'Amanda Feilding', role: 'Founder, Beckley Foundation', id: 7 }
-          ]
-        },
-        { id: 8, name: 'GH Research', type: 'Biotech', stage: 'Public', ticker: 'GHRS', founded: 2018, hq: 'Dublin, Ireland', employees: '40+', substances: ['DMT'], description: 'GH Research is developing 5-MeO-DMT (mebufotenin) for treatment-resistant depression. Their proprietary formulation GH001 uses an inhalation delivery system designed for rapid onset and short duration therapy sessions.', focus: 'Treatment-resistant depression', funding: '$125M+', website: 'ghres.com', logo: '🌀',
-          pipeline: [
-            { name: 'GH001 (5-MeO-DMT)', phase: 'Phase 2', indication: 'Treatment-Resistant Depression', status: 'Active', startDate: '2023', expectedCompletion: '2025' }
-          ],
-          news: [
-            { title: 'Phase 2a Results Show Rapid Antidepressant Effects', date: 'Sep 2024', type: 'Clinical' },
-            { title: 'Initiated Phase 2b Trial for TRD', date: 'Jun 2024', type: 'Clinical' }
-          ],
-          team: []
-        },
-        { id: 9, name: 'Usona Institute', type: 'Non-Profit', stage: 'Non-Profit', ticker: null, founded: 2014, hq: 'Madison, WI', employees: '30+', substances: ['Psilocybin'], description: 'Usona Institute is a nonprofit medical research organization conducting Phase 3 clinical trials of psilocybin for major depressive disorder under the leadership of Bill Linton. Unlike for-profit companies, Usona aims to make psilocybin therapy widely accessible.', focus: 'Major depressive disorder', funding: 'Philanthropic', website: 'usonainstitute.org', logo: '🌿',
-          pipeline: [
-            { name: 'Psilocybin', phase: 'Phase 3', indication: 'Major Depressive Disorder', status: 'Active', startDate: '2022', expectedCompletion: '2025' }
-          ],
-          news: [
-            { title: 'Phase 3 Trial Enrollment Progressing', date: 'Oct 2024', type: 'Clinical' },
-            { title: 'Received FDA Breakthrough Therapy Designation', date: '2019', type: 'Regulatory' }
-          ],
-          team: []
-        },
-        { id: 10, name: 'Incannex Healthcare', type: 'Biotech', stage: 'Public', ticker: 'IXHL', founded: 2016, hq: 'Melbourne, Australia', employees: '25+', substances: ['Psilocybin'], description: 'Incannex Healthcare is an Australian clinical-stage pharmaceutical company developing psilocybin-assisted psychotherapy for generalized anxiety disorder. They are entering Phase 2b trials following positive Phase 2 results.', focus: 'Generalized anxiety disorder', funding: '$50M+', website: 'incannex.com.au', logo: '🦘',
-          pipeline: [
-            { name: 'IHL-42X (Psilocybin)', phase: 'Phase 2b', indication: 'Generalized Anxiety Disorder', status: 'Recruiting', startDate: '2024', expectedCompletion: '2026' }
-          ],
-          news: [
-            { title: 'Positive Phase 2 Results for Psilocybin in GAD', date: 'May 2024', type: 'Clinical' },
-            { title: 'Phase 2b Trial Design Finalized', date: 'Aug 2024', type: 'Clinical' }
-          ],
-          team: []
-        },
-        { id: 11, name: 'Enveric Biosciences', type: 'Biotech', stage: 'Public', ticker: 'ENVB', founded: 2020, hq: 'Naples, FL', employees: '20+', substances: ['Psilocybin'], description: 'Enveric Biosciences is developing EB-003, a next-generation synthetic psilocybin analog that targets serotonergic receptors to induce neuroplasticity. The compound is designed for improved safety and efficacy profiles.', focus: 'Psychiatric disorders', funding: '$30M+', website: 'enveric.com', logo: '🧪',
-          pipeline: [
-            { name: 'EB-003', phase: 'Pre-Clinical', indication: 'PTSD', status: 'Active', startDate: '2024', expectedCompletion: '2026' }
-          ],
-          news: [
-            { title: 'EB-003 Shows Positive Effects in Preclinical PTSD Model', date: 'Jul 2025', type: 'Clinical' },
-            { title: 'Out-Licensed EB-002 to MycoMedica', date: 'Nov 2024', type: 'Business' }
-          ],
-          team: []
-        },
-        { id: 12, name: 'Mindbloom', type: 'Healthcare', stage: 'Series B', ticker: null, founded: 2018, hq: 'New York, NY', employees: '100+', substances: ['Ketamine'], description: 'Mindbloom is a mental health company offering at-home ketamine therapy guided by licensed clinicians via telemedicine. They provide a complete treatment program including medication, therapy sessions, and integration support.', focus: 'Depression & anxiety', funding: '$50M+', website: 'mindbloom.com', logo: '🌸',
-          pipeline: [],
-          news: [
-            { title: 'Expanded Insurance Coverage with Major Providers', date: 'Oct 2024', type: 'Business' },
-            { title: 'Real-World Outcomes Study Shows 89% Improvement', date: 'Sep 2024', type: 'Clinical' },
-            { title: 'Launched in 37 States', date: 'Aug 2024', type: 'Business' }
-          ],
-          team: []
-        },
-        { id: 13, name: 'Field Trip Health', type: 'Healthcare', stage: 'Public', ticker: 'FTRP', founded: 2019, hq: 'Toronto, Canada', employees: '150+', substances: ['Ketamine', 'Psilocybin'], description: 'Field Trip Health operates ketamine-assisted therapy clinics across North America and is developing FT-104, a novel psychedelic molecule. They provide supervised ketamine therapy with integration support.', focus: 'Mental health clinics', funding: '$100M+', website: 'fieldtriphealth.com', logo: '🏕️',
-          pipeline: [
-            { name: 'FT-104', phase: 'Phase 1', indication: 'Treatment-Resistant Depression', status: 'Active', startDate: '2022', expectedCompletion: '2025' }
-          ],
-          news: [
-            { title: 'New Clinic Opens in Los Angeles', date: 'Nov 2024', type: 'Business' },
-            { title: 'FT-104 Phase 1 Results Expected Q1 2025', date: 'Oct 2024', type: 'Clinical' }
-          ],
-          team: []
-        },
-        { id: 14, name: 'Otsuka Pharmaceutical', type: 'Pharma', stage: 'Public', ticker: 'OTSKY', founded: 1964, hq: 'Tokyo, Japan', employees: '33,000+', substances: ['Ketamine'], description: 'Otsuka is a major pharmaceutical company that has entered the psychedelic space through partnerships with Atai Life Sciences and Mindset Pharma. They are developing R-ketamine for depression treatment in Japan.', focus: 'Depression (Japan market)', funding: 'N/A', website: 'otsuka.com', logo: '🏯',
-          pipeline: [
-            { name: 'PCN-101 (R-ketamine)', phase: 'Phase 2', indication: 'Depression', status: 'Active', startDate: '2022', expectedCompletion: '2025' }
-          ],
-          news: [
-            { title: 'Expanded Partnership with Atai for R-ketamine', date: 'Sep 2024', type: 'Business' },
-            { title: 'Initial $5M Investment in Mindset Pharma', date: '2021', type: 'Business' }
-          ],
-          team: []
-        },
-        { id: 15, name: 'PharmaTher Holdings', type: 'Biotech', stage: 'Public', ticker: 'PHRRF', founded: 2020, hq: 'Toronto, Canada', employees: '15+', substances: ['Ketamine', 'LSD'], description: 'PharmaTher is developing next-generation drug delivery systems for psychedelics, including a proprietary microneedle patch (MicroDose-MN) for delivering LSD, psilocybin, and ketamine through the skin.', focus: 'Drug delivery innovation', funding: '$20M+', website: 'pharmather.com', logo: '💉',
-          pipeline: [
-            { name: 'MicroDose-MN (LSD Patch)', phase: 'Phase 1', indication: 'Various', status: 'Planning', startDate: '2024', expectedCompletion: '2026' },
-            { name: 'Ketamine Microneedle', phase: 'Pre-Clinical', indication: 'Depression', status: 'Complete', startDate: '2023', expectedCompletion: '2024' }
-          ],
-          news: [
-            { title: 'Successful LSD Microneedle Patch Research Results', date: 'Dec 2021', type: 'Clinical' },
-            { title: 'Completed Psilocybin and Ketamine Delivery Studies', date: '2023', type: 'Clinical' }
-          ],
-          team: []
-        },
-        { id: 16, name: 'Delix Therapeutics', type: 'Biotech', stage: 'Series B', ticker: null, founded: 2019, hq: 'Boston, MA', employees: '60+', substances: ['Non-Hallucinogenic'], description: 'Delix Therapeutics develops non-hallucinogenic neuroplastogens—compounds that promote neuroplasticity without psychedelic effects. Founded by David Olson after his discovery that psychedelics promote neural growth. Named Nature Spinout of the Year 2022. Their approach could enable scalable, take-home treatments.', focus: 'Depression & PTSD (non-hallucinogenic)', funding: '$100M+', website: 'delixtherapeutics.com', logo: '⚡',
-          pipeline: [
-            { name: 'DLX-001', phase: 'Phase 1', indication: 'Treatment-Resistant Depression', status: 'Active', startDate: '2024', expectedCompletion: '2026' },
-            { name: 'DLX-007', phase: 'Pre-Clinical', indication: 'PTSD', status: 'Active', startDate: '2024', expectedCompletion: '2026' }
-          ],
-          news: [
-            { title: 'Series B Funding Closed at $70M', date: 'Sep 2024', type: 'Business' },
-            { title: 'Named Biotech Breakthrough Award Winner', date: '2023', type: 'Business' }
-          ],
-          team: [
-            { name: 'David Olson, PhD', role: 'Co-Founder & Scientific Advisor', id: 25 }
-          ]
-        },
-        { id: 17, name: 'Gilgamesh Pharmaceuticals', type: 'Biotech', stage: 'Series B', ticker: null, founded: 2019, hq: 'New York, NY', employees: '40+', substances: ['Multiple'], description: 'Gilgamesh Pharmaceuticals uses AI-powered drug discovery to develop next-generation psychiatric medicines including neuroplastogens. AbbVie acquired them for $65M upfront plus up to $1.95B in milestones in 2024—the largest psychedelic sector deal ever. Developing oral NMDA antagonists and 5-HT2A agonists.', focus: 'Depression & anxiety', funding: 'Acquired by AbbVie', website: 'gilgameshpharma.com', logo: '🏛️',
-          pipeline: [
-            { name: 'GM-1020', phase: 'Phase 2', indication: 'Major Depressive Disorder', status: 'Active', startDate: '2024', expectedCompletion: '2026' },
-            { name: 'GM-2505', phase: 'Phase 2', indication: 'Major Depressive Disorder', status: 'Active', startDate: '2024', expectedCompletion: '2026' }
-          ],
-          news: [
-            { title: 'Acquired by AbbVie for Up to $2B', date: 'Sep 2024', type: 'Business' },
-            { title: 'Phase 2 Trials Initiated for Lead Candidates', date: '2024', type: 'Clinical' }
-          ],
-          team: []
-        },
-        { id: 18, name: 'Reunion Neuroscience', type: 'Biotech', stage: 'Public', ticker: 'REUN', founded: 2021, hq: 'Toronto, Canada', employees: '25+', substances: ['5-HT2A Agonists'], description: 'Reunion Neuroscience develops next-generation serotonin receptor agonists for mental health disorders. Their lead candidate RE104 is designed to provide therapeutic benefits with shorter duration and improved safety profile compared to classic psychedelics.', focus: 'Depression & PTSD', funding: '$35M+', website: 'reunionneuro.com', logo: '🔄',
-          pipeline: [
-            { name: 'RE104', phase: 'Phase 1', indication: 'Treatment-Resistant Depression', status: 'Active', startDate: '2023', expectedCompletion: '2025' }
-          ],
-          news: [
-            { title: 'Phase 1 Trial Initiated', date: 'Sep 2023', type: 'Clinical' }
-          ],
-          team: []
-        },
-        { id: 19, name: 'Awakn Life Sciences', type: 'Healthcare', stage: 'Public', ticker: 'AWKN', founded: 2019, hq: 'London, UK', employees: '60+', substances: ['Ketamine', 'MDMA'], description: 'Awakn Life Sciences operates clinics and conducts research focused on treating addiction with psychedelic-assisted therapies. Their ketamine-assisted therapy for alcohol use disorder showed 86% abstinence at 6 months in clinical trials—far exceeding standard treatments.', focus: 'Addiction treatment', funding: '$35M+', website: 'awaknlifesciences.com', logo: '🌅',
-          pipeline: [
-            { name: 'AWKN-P001 (Ketamine)', phase: 'Phase 2', indication: 'Alcohol Use Disorder', status: 'Complete', startDate: '2021', expectedCompletion: '2023' },
-            { name: 'MDMA-AT', phase: 'Phase 2', indication: 'Alcohol Use Disorder', status: 'Planning', startDate: '2025', expectedCompletion: '2027' }
-          ],
-          news: [
-            { title: 'Phase 2 AUD Results: 86% Abstinence Rate', date: 'Nov 2023', type: 'Clinical' },
-            { title: 'Bristol UK Clinic Opened', date: 'Oct 2024', type: 'Business' }
-          ],
-          team: []
-        },
-        { id: 20, name: 'Novamind', type: 'Healthcare', stage: 'Public', ticker: 'NM', founded: 2019, hq: 'Toronto, Canada', employees: '80+', substances: ['Ketamine', 'Psilocybin'], description: 'Novamind operates a network of mental health clinics offering ketamine-assisted therapy and serves as a leading clinical trial site for psychedelic research. They have conducted trials for MAPS, COMPASS Pathways, and other sponsors.', focus: 'Mental health clinics & research', funding: '$40M+', website: 'novamind.ca', logo: '💜',
-          pipeline: [],
-          news: [
-            { title: 'Selected as Clinical Trial Site for Multiple Studies', date: 'Oct 2024', type: 'Clinical' },
-            { title: 'Clinic Network Expanded to 12 Locations', date: 'Aug 2024', type: 'Business' }
-          ],
-          team: []
-        },
-        { id: 21, name: 'Filament Health', type: 'Biotech', stage: 'Public', ticker: 'FH', founded: 2020, hq: 'Vancouver, Canada', employees: '30+', substances: ['Psilocybin'], description: 'Filament Health develops natural, botanical psilocybin for clinical trials and eventual commercialization. Unlike synthetic approaches, they focus on natural extraction while meeting pharmaceutical-grade standards. Their PEX products are used in clinical trials.', focus: 'Natural psilocybin production', funding: '$25M+', website: 'filament.health', logo: '🍄',
-          pipeline: [
-            { name: 'PEX010', phase: 'Phase 2', indication: 'Treatment-Resistant Depression', status: 'Planning', startDate: '2024', expectedCompletion: '2026' },
-            { name: 'PEX020', phase: 'Phase 2', indication: 'Major Depressive Disorder', status: 'Planning', startDate: '2025', expectedCompletion: '2027' }
-          ],
-          news: [
-            { title: 'DEA Schedule I Research License Expanded', date: 'Sep 2024', type: 'Regulatory' },
-            { title: 'Natural Psilocybin Supplied to Multiple Trials', date: 'Aug 2024', type: 'Clinical' }
-          ],
-          team: []
-        },
-        { id: 22, name: 'Tryp Therapeutics', type: 'Biotech', stage: 'Public', ticker: 'TRYP', founded: 2019, hq: 'San Diego, CA', employees: '15+', substances: ['Psilocybin'], description: 'Tryp Therapeutics develops psilocybin-based therapies for eating disorders and chronic pain. Their TRP-8803 program targets binge eating disorder and fibromyalgia—conditions with few effective treatments and large unmet medical need.', focus: 'Eating disorders & chronic pain', funding: '$20M+', website: 'tryptherapeutics.com', logo: '🎯',
-          pipeline: [
-            { name: 'TRP-8803', phase: 'Phase 2', indication: 'Binge Eating Disorder', status: 'Active', startDate: '2023', expectedCompletion: '2025' },
-            { name: 'TRP-8803', phase: 'Phase 2', indication: 'Fibromyalgia', status: 'Recruiting', startDate: '2024', expectedCompletion: '2026' }
-          ],
-          news: [
-            { title: 'Phase 2a BED Trial Enrollment Complete', date: 'Oct 2024', type: 'Clinical' }
-          ],
-          team: []
-        },
-        { id: 23, name: 'Mydecine Innovations', type: 'Biotech', stage: 'Public', ticker: 'MYCOF', founded: 2020, hq: 'Denver, CO', employees: '25+', substances: ['Psilocybin', 'MDMA'], description: 'Mydecine Innovations develops psychedelic-assisted therapies with a focus on PTSD treatment for military veterans. They combine proprietary compounds with digital therapeutics for comprehensive mental health solutions.', focus: 'PTSD & addiction', funding: '$30M+', website: 'mydecine.com', logo: '🌿',
-          pipeline: [
-            { name: 'MYCO-001', phase: 'Phase 2', indication: 'PTSD', status: 'Recruiting', startDate: '2023', expectedCompletion: '2025' },
-            { name: 'MYCO-002', phase: 'Pre-Clinical', indication: 'Smoking Cessation', status: 'Active', startDate: '2024', expectedCompletion: '2026' }
-          ],
-          news: [
-            { title: 'Veterans PTSD Trial Partnership Announced', date: 'Aug 2024', type: 'Clinical' }
-          ],
-          team: []
-        },
-        { id: 24, name: 'Seelos Therapeutics', type: 'Biotech', stage: 'Public', ticker: 'SEEL', founded: 2016, hq: 'New York, NY', employees: '30+', substances: ['Ketamine'], description: 'Seelos Therapeutics develops therapies for CNS disorders including depression and suicidality. Their intranasal ketamine program SLS-002 targets acute suicidal ideation in major depressive disorder—a critical unmet need with potential for rapid intervention.', focus: 'Acute suicidal ideation', funding: '$80M+', website: 'seelostherapeutics.com', logo: '🔬',
-          pipeline: [
-            { name: 'SLS-002 (Intranasal Ketamine)', phase: 'Phase 2', indication: 'Acute Suicidal Ideation', status: 'Active', startDate: '2022', expectedCompletion: '2025' }
-          ],
-          news: [
-            { title: 'Phase 2 ASID Trial Results Expected Q1 2025', date: 'Nov 2024', type: 'Clinical' }
-          ],
-          team: []
-        },
-        { id: 25, name: 'Algernon Pharmaceuticals', type: 'Biotech', stage: 'Public', ticker: 'AGN', founded: 2015, hq: 'Vancouver, Canada', employees: '15+', substances: ['DMT'], description: 'Algernon Pharmaceuticals is developing DMT as a treatment for stroke recovery. Their unique approach uses sub-hallucinogenic doses of DMT to promote neuroplasticity and recovery after ischemic stroke—potentially the first psychedelic-based stroke treatment.', focus: 'Stroke recovery', funding: '$25M+', website: 'algernonpharm.com', logo: '🧠',
-          pipeline: [
-            { name: 'AP-188 (DMT)', phase: 'Phase 1', indication: 'Stroke Recovery', status: 'Active', startDate: '2023', expectedCompletion: '2025' }
-          ],
-          news: [
-            { title: 'Phase 1 Stroke Recovery Trial Initiated', date: 'Jun 2023', type: 'Clinical' }
-          ],
-          team: []
-        },
-        { id: 26, name: 'Small Pharma', type: 'Biotech', stage: 'Acquired', ticker: null, founded: 2015, hq: 'London, UK', employees: '30+', substances: ['DMT'], description: 'Small Pharma developed DMT-assisted therapy for major depressive disorder before being acquired by Cybin in 2023. Their SPL026 program pioneered short-acting DMT protocols that could enable treatment in a single day. The technology is now part of Cybin\'s CYB004 program.', focus: 'Major depressive disorder', funding: 'Acquired by Cybin', website: 'smallpharma.com', logo: '💊',
-          pipeline: [
-            { name: 'SPL026 (DMT)', phase: 'Phase 2', indication: 'Major Depressive Disorder', status: 'Acquired', startDate: '2022', expectedCompletion: 'N/A' }
-          ],
-          news: [
-            { title: 'Acquired by Cybin for CAD$48M', date: 'Oct 2023', type: 'Business' },
-            { title: 'Phase 2a Results Showed Rapid Antidepressant Effects', date: 'Mar 2023', type: 'Clinical' }
-          ],
-          team: []
-        },
-        { id: 27, name: 'Entheon Biomedical', type: 'Biotech', stage: 'Public', ticker: 'ENBI', founded: 2020, hq: 'Vancouver, Canada', employees: '15+', substances: ['DMT'], description: 'Entheon Biomedical develops DMT-based therapies for addiction and substance use disorders. Their approach uses the intense but short-acting nature of DMT to provide therapeutic experiences that can be completed in a clinical setting within hours.', focus: 'Substance use disorder', funding: '$15M+', website: 'entheonbiomedical.com', logo: '🌌',
-          pipeline: [
-            { name: 'DMT-AT', phase: 'Phase 1', indication: 'Opioid Use Disorder', status: 'Planning', startDate: '2024', expectedCompletion: '2026' }
-          ],
-          news: [
-            { title: 'Pre-IND Meeting with FDA Completed', date: 'Sep 2024', type: 'Regulatory' }
-          ],
-          team: []
-        },
-        { id: 28, name: 'Silo Pharma', type: 'Biotech', stage: 'Public', ticker: 'SILO', founded: 2019, hq: 'Sarasota, FL', employees: '10+', substances: ['Psilocybin', 'Ketamine'], description: 'Silo Pharma develops psychedelic therapeutics with a focus on PTSD and stress-related disorders. They have research partnerships with Columbia University and the University of Maryland for psilocybin and ketamine studies.', focus: 'PTSD & stress disorders', funding: '$10M+', website: 'silopharma.com', logo: '🏺',
-          pipeline: [
-            { name: 'SPC-15', phase: 'Pre-Clinical', indication: 'PTSD', status: 'Active', startDate: '2023', expectedCompletion: '2025' }
-          ],
-          news: [
-            { title: 'Columbia University Partnership Expanded', date: 'Oct 2024', type: 'Business' }
-          ],
-          team: []
-        },
-        { id: 29, name: 'Psylo', type: 'Biotech', stage: 'Series A', ticker: null, founded: 2021, hq: 'Melbourne, Australia', employees: '20+', substances: ['Psilocybin'], description: 'Psylo (formerly Psyence Biomed) is an Australian biotech developing psilocybin therapies with a focus on end-of-life distress and depression. They have a research agreement with Daiichi Sankyo, one of Japan\'s largest pharmaceutical companies.', focus: 'End-of-life distress & depression', funding: '$20M+', website: 'psylo.bio', logo: '🇦🇺',
-          pipeline: [
-            { name: 'PSYLO-001', phase: 'Phase 2', indication: 'End-of-Life Distress', status: 'Recruiting', startDate: '2024', expectedCompletion: '2026' }
-          ],
-          news: [
-            { title: 'Daiichi Sankyo Research Agreement Signed', date: 'May 2024', type: 'Business' }
-          ],
-          team: []
-        },
-        { id: 30, name: 'Synthesis Institute', type: 'Retreat', stage: 'Private', ticker: null, founded: 2018, hq: 'Amsterdam, Netherlands', employees: '40+', substances: ['Psilocybin'], description: 'Synthesis operates legal psilocybin retreats in the Netherlands, offering multi-day guided experiences with integration support. Founded with science-based protocols, they have served thousands of participants seeking personal growth and healing.', focus: 'Legal psilocybin experiences', funding: '$10M+', website: 'synthesisretreat.com', logo: '🌀',
-          pipeline: [],
-          news: [
-            { title: 'Expanded Retreat Capacity in Netherlands', date: 'Sep 2024', type: 'Business' }
-          ],
-          team: []
-        },
-        { id: 31, name: 'Journey Clinical', type: 'Healthcare', stage: 'Series A', ticker: null, founded: 2020, hq: 'New York, NY', employees: '30+', substances: ['Ketamine'], description: 'Journey Clinical is a platform connecting patients with licensed therapists for ketamine-assisted psychotherapy. Their network model enables hundreds of therapists to offer psychedelic-assisted therapy through a standardized clinical framework.', focus: 'Ketamine-assisted therapy access', funding: '$10M+', website: 'journeyclinical.com', logo: '🛤️',
-          pipeline: [],
-          news: [
-            { title: 'Therapist Network Expanded to 500+ Providers', date: 'Oct 2024', type: 'Business' }
-          ],
-          team: []
-        },
-        { id: 32, name: 'Nue Life Health', type: 'Healthcare', stage: 'Series A', ticker: null, founded: 2020, hq: 'Miami, FL', employees: '50+', substances: ['Ketamine'], description: 'Nue Life Health provides at-home ketamine treatment programs with health coaching, integration support, and aftercare. Their digital-first approach makes psychedelic-assisted therapy more accessible and affordable.', focus: 'At-home ketamine therapy', funding: '$23M+', website: 'nuelife.com', logo: '💚',
-          pipeline: [],
-          news: [
-            { title: 'Launched in All 50 States', date: 'Aug 2024', type: 'Business' },
-            { title: 'Integration Coaching Program Enhanced', date: 'Jul 2024', type: 'Business' }
-          ],
-          team: []
-        },
-        { id: 33, name: 'Wondermed', type: 'Healthcare', stage: 'Series A', ticker: null, founded: 2021, hq: 'San Francisco, CA', employees: '30+', substances: ['Ketamine'], description: 'Wondermed offers at-home ketamine-assisted therapy with a focus on affordability and accessibility. Their subscription model and telehealth approach has made ketamine therapy available to tens of thousands of patients.', focus: 'Affordable ketamine therapy', funding: '$15M+', website: 'wondermed.com', logo: '✨',
-          pipeline: [],
-          news: [
-            { title: 'Reached 50,000 Patient Milestone', date: 'Sep 2024', type: 'Business' }
-          ],
-          team: []
-        },
-        { id: 34, name: 'Heroic Hearts Project', type: 'Non-Profit', stage: 'Non-Profit', ticker: null, founded: 2017, hq: 'Houston, TX', employees: '20+', substances: ['Psilocybin', 'Ayahuasca'], description: 'Heroic Hearts Project connects military veterans with psychedelic therapies for PTSD and trauma. They facilitate access to legal treatments in countries like Jamaica and work to advance research and policy reform for veteran mental health.', focus: 'Veterans mental health', funding: 'Donations', website: 'heroicheartsproject.org', logo: '🎖️',
-          pipeline: [],
-          news: [
-            { title: 'Served 1,000th Veteran', date: 'Oct 2024', type: 'Business' },
-            { title: 'Congressional Testimony on Veteran Psychedelic Access', date: 'Sep 2024', type: 'Regulatory' }
-          ],
-          team: []
-        },
-        { id: 35, name: 'Beckley Foundation', type: 'Non-Profit', stage: 'Non-Profit', ticker: null, founded: 1998, hq: 'Oxford, UK', employees: '15+', substances: ['Multiple'], description: 'The Beckley Foundation, founded by Amanda Feilding, has been a driving force behind psychedelic research and drug policy reform for over 25 years. They have collaborated with Imperial College London, Johns Hopkins, and other institutions on landmark studies.', focus: 'Research & policy advocacy', funding: 'Donations', website: 'beckleyfoundation.org', logo: '🏛️',
-          pipeline: [],
-          news: [
-            { title: 'Global Drug Policy Summit Co-Hosted', date: 'Nov 2024', type: 'Business' }
-          ],
-          team: [
-            { name: 'Amanda Feilding', role: 'Founder & Director', id: 7 }
-          ]
-        },
-      ];
+      const apiData = useApiData();
+      const companies = (apiData?.companies || []).map(normalizeCompany);
 
       const savedCompanies = companies.slice(0, 3);
 
@@ -1249,7 +1056,12 @@
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '20px', marginBottom: '40px' }}>
-              {[{ value: '150+', label: 'Total Companies', color: '#7dd3c0' }, { value: '12', label: 'Public Companies', color: '#f0b775' }, { value: '$1.2B', label: 'Total Funding', color: '#a8c5e2' }, { value: '8', label: 'Phase 3 Programs', color: '#d4a5c9' }].map((stat, i) => (
+              {[
+                { value: String(companies.length), label: 'Total Companies', color: '#7dd3c0' },
+                { value: String(companies.filter(c => c.stage === 'Public').length), label: 'Public Companies', color: '#f0b775' },
+                { value: String(new Set(companies.flatMap(c => c.substances)).size), label: 'Substances Covered', color: '#a8c5e2' },
+                { value: String(companies.reduce((n, c) => n + c.pipeline.filter(p => /Phase 3/i.test(p.phase)).length, 0)), label: 'Phase 3 Programs', color: '#d4a5c9' }
+              ].map((stat, i) => (
                 <div key={i} style={{ ...sharedStyles.card, textAlign: 'center' }}>
                   <div style={{ fontFamily: '"Fraunces", serif', fontSize: '32px', fontWeight: 600, color: stat.color }}>{stat.value}</div>
                   <div style={{ fontSize: '14px', color: '#6b7370' }}>{stat.label}</div>
@@ -1408,48 +1220,8 @@
       const roles = ['All', 'Researcher', 'Executive', 'Clinician', 'Investor', 'Advocate', 'Founder'];
       const orgs = ['All', 'Johns Hopkins', 'COMPASS Pathways', 'MAPS', 'UCSF', 'Imperial College London', 'Atai Life Sciences', 'NYU Langone', 'UC Davis', 'Usona Institute', 'Mount Sinai'];
 
-      const people = [
-        { id: 1, name: 'Dr. Robin Carhart-Harris', role: 'Researcher', title: 'Director, Neuroscape Psychedelics Division', org: 'UCSF', location: 'San Francisco, CA', bio: 'Dr. Robin Carhart-Harris is one of the most influential psychedelic researchers in the world. He founded the Centre for Psychedelic Research at Imperial College London in 2019—the first of its kind globally. His pioneering brain imaging studies with LSD, psilocybin, MDMA, and DMT have fundamentally changed our understanding of how psychedelics affect the brain. He developed the "entropic brain" hypothesis and the REBUS model explaining psychedelic mechanisms. In 2021, he moved to UCSF to lead the Neuroscape Psychedelics Division. He has published over 150 peer-reviewed papers with 25,000+ citations.', expertise: ['Psilocybin', 'Neuroimaging', 'Depression', 'LSD', 'DMT'], papers: 150, citations: '25,000+', image: '👨‍🔬' },
-        { id: 2, name: 'Rick Doblin, PhD', role: 'Founder', title: 'Founder & President', org: 'MAPS', location: 'San Jose, CA', bio: 'Rick Doblin founded the Multidisciplinary Association for Psychedelic Studies (MAPS) in 1986 and has been the leading advocate for psychedelic research for nearly four decades. His tireless work transformed MDMA from a Schedule I controlled substance to the brink of FDA approval for PTSD treatment. Doblin earned his PhD in public policy from Harvard, focusing on the regulation of psychedelics. Under his leadership, MAPS has raised over $100 million for research, completed Phase 3 clinical trials, and trained thousands of therapists. He is widely credited with reviving the field of psychedelic medicine.', expertise: ['MDMA', 'Policy', 'PTSD', 'Advocacy'], papers: 50, citations: '5,000+', image: '👨‍💼' },
-        { id: 3, name: 'Dr. Matthew Johnson', role: 'Researcher', title: 'Professor of Psychiatry', org: 'Johns Hopkins', location: 'Baltimore, MD', bio: 'Dr. Matthew Johnson is a Professor of Psychiatry and Behavioral Sciences at Johns Hopkins University and a leading expert on psychedelics and addiction. He directs the Center for Psychedelic and Consciousness Research following the passing of Roland Griffiths. His groundbreaking research on psilocybin for smoking cessation showed 80% abstinence rates at 6 months—far exceeding other treatments. In 2017, he received the first federally funded grant for psychedelic research in humans since the 1970s. He has published 120+ papers and frequently appears in media discussing psychedelic science.', expertise: ['Psilocybin', 'Addiction', 'Clinical Trials', 'Smoking Cessation'], papers: 120, citations: '15,000+', image: '👨‍⚕️' },
-        { id: 4, name: 'Ekaterina Malievskaia, MD', role: 'Executive', title: 'Co-Founder & Chief Medical Officer', org: 'COMPASS Pathways', location: 'London, UK', bio: 'Dr. Ekaterina Malievskaia is a physician and healthcare entrepreneur who co-founded COMPASS Pathways with her husband George Goldsmith in 2016. Their personal experience seeking treatment options for their son\'s treatment-resistant depression led them to explore psilocybin therapy. As CMO, she oversees COMPASS\'s clinical development program and has been instrumental in advancing COMP360 through Phase 3 trials. She holds an MD from the Moscow Medical Academy and has over 20 years of healthcare industry experience.', expertise: ['Psilocybin', 'Clinical Development', 'Treatment-Resistant Depression'], papers: 20, citations: '1,500+', image: '👩‍💼' },
-        { id: 5, name: 'Prof. David Nutt', role: 'Researcher', title: 'Edmund J Safra Professor of Neuropsychopharmacology', org: 'Imperial College London', location: 'London, UK', bio: 'Professor David Nutt is one of the world\'s leading neuropsychopharmacologists with over 500 peer-reviewed publications. He served as the UK\'s chief drug adviser until 2009 when he was controversially dismissed for stating that ecstasy and LSD were less harmful than alcohol. He founded Drug Science, an independent scientific body on drugs. At Imperial College, he has collaborated on pioneering psychedelic research and advocates for evidence-based drug policy. His research spans addiction, anxiety, depression, and sleep disorders.', expertise: ['Neuropsychopharmacology', 'Policy', 'Drug Science', 'Psilocybin'], papers: 500, citations: '50,000+', image: '👨‍🔬' },
-        { id: 6, name: 'Florian Brand', role: 'Executive', title: 'Co-Founder & CEO', org: 'Atai Life Sciences', location: 'Berlin, Germany', bio: 'Florian Brand co-founded Atai Life Sciences in 2018 with Christian Angermayer and Lars Wilde. Under his leadership, Atai has become one of the largest psychedelic medicine companies, employing a "hub and spoke" business model with multiple subsidiaries and a 20%+ stake in COMPASS Pathways. The company went public in 2021 with backing from Peter Thiel and has raised over $360 million. Brand oversees a diverse pipeline spanning psilocybin, DMT, R-ketamine, ibogaine, and non-psychedelic compounds for various mental health conditions.', expertise: ['Business Strategy', 'Investment', 'Drug Development'], papers: 5, citations: '200+', image: '👨‍💼' },
-        { id: 7, name: 'Amanda Feilding', role: 'Founder', title: 'Founder & Director', org: 'Beckley Foundation', location: 'Oxford, UK', bio: 'Amanda Feilding, Countess of Wemyss, founded the Beckley Foundation in 1998 to pioneer research into consciousness and drug policy reform. She has collaborated on numerous studies with Imperial College London and Johns Hopkins, including the first LSD brain imaging study. Feilding co-founded Beckley Psytech to develop psychedelic medicines commercially. At 80+, she remains an active advocate for rational drug policy and continues to support cutting-edge research into psychedelics, cannabis, and consciousness.', expertise: ['Policy Reform', 'Consciousness Research', 'LSD', 'Drug Policy'], papers: 30, citations: '3,000+', image: '👩‍🔬' },
-        { id: 8, name: 'George Goldsmith', role: 'Executive', title: 'Co-Founder & CEO', org: 'COMPASS Pathways', location: 'London, UK', bio: 'George Goldsmith co-founded COMPASS Pathways in 2016 to accelerate patient access to psilocybin therapy. His background in healthcare innovation and technology led him to recognize the potential of psychedelic-assisted therapy. Under his leadership, COMPASS became the first psychedelic company to list on NASDAQ and has raised over $240 million. He oversees the company\'s mission to transform mental healthcare through evidence-based psilocybin therapy, currently in Phase 3 trials for treatment-resistant depression.', expertise: ['Healthcare Innovation', 'Business Leadership', 'Psilocybin'], papers: 10, citations: '500+', image: '👨‍💼' },
-        { id: 9, name: 'Dr. Jennifer Mitchell', role: 'Researcher', title: 'Associate Professor of Neurology', org: 'UCSF', location: 'San Francisco, CA', bio: 'Dr. Jennifer Mitchell is a neuroscientist at UCSF studying how MDMA and other psychedelics affect the brain and behavior. Her research has been pivotal in understanding the neurobiological mechanisms of MDMA-assisted therapy for PTSD. She was a lead author on the landmark MAPS Phase 3 trial published in Nature Medicine showing MDMA\'s efficacy for PTSD. Her work focuses on the intersection of social behavior, reward processing, and therapeutic applications of psychoactive compounds.', expertise: ['MDMA', 'Neuroscience', 'PTSD', 'Social Behavior'], papers: 80, citations: '8,000+', image: '👩‍🔬' },
-        { id: 10, name: 'Dr. Roland Griffiths', role: 'Researcher', title: 'Founding Director (1946-2023)', org: 'Johns Hopkins Center', location: 'Baltimore, MD', bio: 'Dr. Roland Griffiths (1946-2023) was the founding director of the Johns Hopkins Center for Psychedelic and Consciousness Research. His 2006 landmark study showing psilocybin could occasion mystical experiences with lasting positive effects reignited scientific interest in psychedelics after decades of dormancy. With over 400 publications, he shaped modern psychedelic research methodology and trained the next generation of researchers. His work on psilocybin for cancer-related distress, addiction, and depression established the evidence base for therapeutic use. He passed away in October 2023 from cancer.', expertise: ['Psilocybin', 'Consciousness', 'Mystical Experience', 'Depression'], papers: 400, citations: '40,000+', image: '🕯️' },
-        { id: 11, name: 'Doug Drysdale', role: 'Executive', title: 'CEO', org: 'Cybin', location: 'Toronto, Canada', bio: 'Doug Drysdale is the CEO of Cybin, leading the company\'s development of next-generation psychedelic therapeutics. He has over 25 years of pharmaceutical industry experience, including executive roles at Teva Pharmaceutical and Alvogen. Under his leadership, Cybin has advanced CYB003 (deuterated psilocybin) into Phase 3 trials for major depressive disorder and secured FDA Breakthrough Therapy Designation. He emphasizes Cybin\'s scientific approach to improving upon classic psychedelics through deuteration and novel delivery mechanisms.', expertise: ['Pharmaceutical Development', 'Business Strategy', 'Drug Development'], papers: 5, citations: '100+', image: '👨‍💼' },
-        { id: 12, name: 'Robert Barrow', role: 'Executive', title: 'CEO', org: 'MindMed', location: 'New York, NY', bio: 'Robert Barrow is the CEO of MindMed, appointed in December 2023 after serving as interim CEO and Chief Development Officer. He has over a decade of pharmaceutical industry experience and has stabilized the company after a period of internal turmoil. Under his leadership, MindMed received FDA Breakthrough Therapy Designation for MM120 (LSD) in generalized anxiety disorder and initiated Phase 3 trials. He has focused on executing a streamlined clinical development strategy and rebuilding investor confidence.', expertise: ['Pharmaceutical Development', 'Clinical Trials', 'Leadership'], papers: 10, citations: '200+', image: '👨‍💼' },
-        { id: 13, name: 'Dr. David Erritzoe', role: 'Researcher', title: 'Clinical Director, Centre for Psychedelic Research', org: 'Imperial College London', location: 'London, UK', bio: 'Dr. David Erritzoe is a psychiatrist and Clinical Director at Imperial College London\'s Centre for Psychedelic Research. He collaborates with Prof. David Nutt on research into the therapeutic potential of psychedelics and ketamine. In 2021, he established the CIPPRes Clinic at St. Charles Hospital—the first NHS-based psychedelic research clinic in the UK. His research focuses on the mechanisms and clinical applications of psychedelics, particularly for depression and end-of-life anxiety.', expertise: ['Psilocybin', 'Clinical Psychiatry', 'Ketamine', 'MDMA'], papers: 60, citations: '6,000+', image: '👨‍⚕️' },
-        { id: 14, name: 'Dr. Frederick Barrett', role: 'Researcher', title: 'Associate Professor of Psychiatry', org: 'Johns Hopkins', location: 'Baltimore, MD', bio: 'Dr. Frederick "Fritz" Barrett is an Associate Professor at Johns Hopkins University working at the Center for Psychedelic and Consciousness Research. His research focuses on understanding the neurobiological mechanisms through which psychedelics produce their therapeutic effects, using neuroimaging and behavioral measures. He is particularly interested in how psychedelics affect music perception, emotion processing, and creativity. He also studies the safety and abuse potential of psychedelics.', expertise: ['Neuroimaging', 'Music & Emotion', 'Psilocybin', 'Safety Research'], papers: 70, citations: '5,000+', image: '👨‍🔬' },
-        { id: 15, name: 'Dr. Rachel Yehuda', role: 'Researcher', title: 'Professor of Psychiatry & Neuroscience', org: 'Mount Sinai', location: 'New York, NY', bio: 'Dr. Rachel Yehuda is a Professor of Psychiatry and Neuroscience at the Icahn School of Medicine at Mount Sinai, specializing in trauma and PTSD. She directs the Center for Psychedelic Psychotherapy and Trauma Research, which studies MDMA-assisted therapy and other psychedelic treatments for PTSD. Her pioneering work on epigenetics and intergenerational trauma has transformed our understanding of PTSD. She brings a rigorous scientific approach to psychedelic therapy research.', expertise: ['PTSD', 'Trauma', 'MDMA', 'Epigenetics'], papers: 300, citations: '35,000+', image: '👩‍🔬' },
-        { id: 16, name: 'Dr. James Fadiman', role: 'Researcher', title: 'Psychedelic Researcher & Author', org: 'Independent', location: 'Menlo Park, CA', bio: 'Dr. James Fadiman is a pioneer of psychedelic research dating back to the 1960s. He participated in the famous "psychedelics in problem-solving" experiment at the International Foundation for Advanced Study and co-founded the Institute of Transpersonal Psychology (now Sofia University). His book "The Psychedelic Explorer\'s Guide" popularized the concept of microdosing, leading to worldwide interest in sub-perceptual psychedelic use. At 80+, he continues to collect microdosing reports and advocate for psychedelic research.', expertise: ['Microdosing', 'Problem Solving', 'Transpersonal Psychology'], papers: 40, citations: '4,000+', image: '👨‍🔬' },
-        { id: 17, name: 'Dr. Rick Strassman', role: 'Researcher', title: 'Clinical Associate Professor', org: 'UNM School of Medicine', location: 'Taos, NM', bio: 'Dr. Rick Strassman conducted the first new US government-approved psychedelic research in over 20 years when he began his DMT studies in 1990. His book "DMT: The Spirit Molecule" introduced millions to the powerful effects of dimethyltryptamine and proposed theories about its role in near-death and mystical experiences. The book was adapted into a popular documentary. His research reopened the door for subsequent psychedelic studies and remains influential in understanding DMT\'s unique phenomenology.', expertise: ['DMT', 'Consciousness', 'Endogenous Psychedelics'], papers: 30, citations: '3,500+', image: '👨‍🔬' },
-        { id: 18, name: 'Christian Angermayer', role: 'Investor', title: 'Founder & Chairman', org: 'Apeiron Investment Group', location: 'London, UK', bio: 'Christian Angermayer is a German entrepreneur and investor who has become one of the most influential figures in psychedelic finance. He co-founded Atai Life Sciences and was an early investor in COMPASS Pathways. His firm Apeiron Investment Group has backed numerous psychedelic companies. Angermayer has been vocal about his personal positive experiences with psilocybin and advocates for psychedelic therapy as a transformative mental health treatment. His investments have helped legitimize the psychedelic medicine industry.', expertise: ['Investment', 'Entrepreneurship', 'Business Development'], papers: 0, citations: 'N/A', image: '👨‍💼' },
-        { id: 19, name: 'Dr. Harriet de Wit', role: 'Researcher', title: 'Professor of Psychiatry', org: 'University of Chicago', location: 'Chicago, IL', bio: 'Dr. Harriet de Wit has researched psychoactive drugs for over four decades at the University of Chicago. Her innovative studies investigate the effects of LSD and MDMA on brain function, mood, and social behavior. She has trained countless students and post-doctoral fellows and published over 300 scientific papers. In 2019, she received the Distinguished Investigator Award from the European Behavioural Pharmacology Society. Her rigorous methodology has advanced our understanding of psychedelic pharmacology.', expertise: ['Pharmacology', 'MDMA', 'LSD', 'Behavioral Science'], papers: 300, citations: '20,000+', image: '👩‍🔬' },
-        { id: 20, name: 'Dr. Michael Bogenschutz', role: 'Researcher', title: 'Professor of Psychiatry', org: 'NYU Langone', location: 'New York, NY', bio: 'Dr. Michael Bogenschutz is a Professor of Psychiatry at NYU Langone Health and Director of the NYU Langone Center for Psychedelic Medicine. His research focuses on psilocybin-assisted therapy for alcohol use disorder, with landmark studies showing significant reductions in heavy drinking. He also studies psilocybin for depression and existential distress in cancer patients. His work has helped establish NYU as a leading center for psychedelic research alongside Johns Hopkins.', expertise: ['Psilocybin', 'Alcohol Use Disorder', 'Addiction Medicine'], papers: 80, citations: '7,000+', image: '👨‍⚕️' },
-        { id: 21, name: 'Dr. Natalie Gukasyan', role: 'Researcher', title: 'Assistant Professor & Medical Director', org: 'Johns Hopkins', location: 'Baltimore, MD', bio: 'Dr. Natalie Gukasyan is the Medical Director of the Johns Hopkins Center for Psychedelic and Consciousness Research. She is leading the development of an evidence-based postdoctoral fellowship program to train psychiatrists in psychedelic-assisted therapy. Her clinical research focuses on psilocybin treatments, and she is helping establish standards for the coming era of psychedelic medicine.', expertise: ['Clinical Psychiatry', 'Psilocybin', 'Medical Education'], papers: 40, citations: '2,500+', image: '👩‍⚕️' },
-        { id: 22, name: 'Dr. Albert Garcia-Romeu', role: 'Researcher', title: 'Associate Professor', org: 'Johns Hopkins', location: 'Baltimore, MD', bio: 'Dr. Albert Garcia-Romeu is an Associate Professor at Johns Hopkins studying psilocybin for smoking cessation and other addictions. His research has shown remarkable 80% abstinence rates for smoking cessation with psilocybin therapy—far exceeding conventional treatments. He received a prestigious NIH grant to study psilocybin for opioid use disorder, marking growing federal support for psychedelic research.', expertise: ['Addiction', 'Smoking Cessation', 'Psilocybin', 'Opioid Use Disorder'], papers: 60, citations: '4,500+', image: '👨‍🔬' },
-        { id: 23, name: 'Dr. David Yaden', role: 'Researcher', title: 'Roland R. Griffiths Professor', org: 'Johns Hopkins', location: 'Baltimore, MD', bio: 'Dr. David Yaden is the first recipient of the Roland R. Griffiths Professorship in Psychedelic Research on Secular Spirituality and Well-Being at Johns Hopkins. His research focuses on the psychological effects of transformative experiences, including those induced by psychedelics. His 2022 book "The Varieties of Spiritual Experience" explores the science of mystical states. He carries forward Griffiths\' legacy of studying consciousness and well-being.', expertise: ['Mystical Experience', 'Well-Being', 'Consciousness', 'Psychology'], papers: 50, citations: '3,000+', image: '👨‍🔬' },
-        { id: 24, name: 'Dr. Adam Gazzaley', role: 'Researcher', title: 'Founder & Executive Director', org: 'UCSF Neuroscape', location: 'San Francisco, CA', bio: 'Dr. Adam Gazzaley is a neuroscientist and founder of Neuroscape at UCSF, which launched a Psychedelics Division in 2021 led by Robin Carhart-Harris. He pioneered the use of video games and virtual reality as cognitive interventions and is applying these technologies to enhance psychedelic therapy. His work bridges neuroscience, technology, and mental health treatment.', expertise: ['Neurotechnology', 'VR/AR', 'Cognitive Enhancement', 'Digital Therapeutics'], papers: 150, citations: '20,000+', image: '👨‍🔬' },
-        { id: 25, name: 'Dr. David Olson', role: 'Researcher', title: 'Professor of Chemistry', org: 'UC Davis', location: 'Davis, CA', bio: 'Dr. David Olson is a Professor of Chemistry at UC Davis and co-founder of Delix Therapeutics. His groundbreaking discovery that psychedelics promote neuroplasticity led to the development of "psychoplastogens"—non-hallucinogenic compounds that retain therapeutic benefits. His Nature publications have transformed drug discovery in psychiatry. He is pioneering a new class of take-home mental health treatments.', expertise: ['Medicinal Chemistry', 'Neuroplasticity', 'Drug Discovery', 'Psychoplastogens'], papers: 80, citations: '8,000+', image: '👨‍🔬' },
-        { id: 26, name: 'Dr. Manoj Doss', role: 'Researcher', title: 'Research Fellow', org: 'Johns Hopkins', location: 'Baltimore, MD', bio: 'Dr. Manoj Doss is a cognitive neuroscientist at Johns Hopkins studying how psychedelics affect memory and cognition. His research uses neuroimaging to understand the brain mechanisms underlying psychedelic experiences and their therapeutic effects. He has contributed important insights into how psychedelics may facilitate memory reconsolidation and belief change in therapy.', expertise: ['Cognitive Neuroscience', 'Memory', 'Neuroimaging', 'Psilocybin'], papers: 35, citations: '2,000+', image: '👨‍🔬' },
-        { id: 27, name: 'Dr. Cody Wenthur', role: 'Researcher', title: 'Associate Professor', org: 'University of Wisconsin', location: 'Madison, WI', bio: 'Dr. Cody Wenthur leads psychedelic research at the University of Wisconsin-Madison, investigating whether conscious awareness during psychedelic experiences is necessary for therapeutic effects. His innovative study design using amnesia-inducing medication alongside psilocybin could reveal fundamental insights about how these medicines work.', expertise: ['Pharmacology', 'Drug Development', 'Psilocybin', 'Mechanism Research'], papers: 40, citations: '2,500+', image: '👨‍🔬' },
-        { id: 28, name: 'Dr. Brandon Weiss', role: 'Researcher', title: 'Research Fellow', org: 'Johns Hopkins', location: 'Baltimore, MD', bio: 'Dr. Brandon Weiss is a researcher at Johns Hopkins studying the therapeutic mechanisms of psilocybin and other psychedelics. His work focuses on understanding how psychedelic experiences translate into lasting psychological benefits, particularly for depression and anxiety disorders.', expertise: ['Clinical Psychology', 'Psilocybin', 'Mechanism Research'], papers: 25, citations: '1,500+', image: '👨‍🔬' },
-        { id: 29, name: 'Dr. Rayyan Zafar', role: 'Researcher', title: 'Research Associate', org: 'Imperial College London', location: 'London, UK', bio: 'Dr. Rayyan Zafar is a psychiatrist and researcher at Imperial College London\'s Centre for Psychedelic Research. He studies the clinical applications of psychedelics and ketamine for depression and has contributed to multiple clinical trials. He frequently collaborates with Robin Carhart-Harris and David Nutt on cutting-edge research.', expertise: ['Clinical Psychiatry', 'Psilocybin', 'Ketamine', 'Depression'], papers: 30, citations: '2,000+', image: '👨‍⚕️' },
-        { id: 30, name: 'Dr. Peter Hendricks', role: 'Researcher', title: 'Professor of Psychology', org: 'University of Alabama', location: 'Birmingham, AL', bio: 'Dr. Peter Hendricks is a Professor at the University of Alabama at Birmingham studying psilocybin for cocaine use disorder and other addictions. His epidemiological research first suggested that psychedelic use is associated with reduced suicidality and psychological distress, helping build the case for clinical trials.', expertise: ['Addiction', 'Epidemiology', 'Psilocybin', 'Substance Use Disorder'], papers: 70, citations: '5,000+', image: '👨‍🔬' },
-        { id: 31, name: 'Dr. Charles Grob', role: 'Researcher', title: 'Professor of Psychiatry', org: 'UCLA', location: 'Los Angeles, CA', bio: 'Dr. Charles Grob is a Professor of Psychiatry at UCLA who conducted pioneering research on MDMA-assisted therapy and psilocybin for cancer-related anxiety in the 1990s-2000s. His early work helped establish safety protocols and demonstrated therapeutic potential when few researchers dared study psychedelics. He is considered a bridge between the first wave of research and the modern renaissance.', expertise: ['MDMA', 'Psilocybin', 'End-of-Life Care', 'Cancer Distress'], papers: 100, citations: '8,000+', image: '👨‍⚕️' },
-        { id: 32, name: 'Dr. Francisco Moreno', role: 'Researcher', title: 'Professor of Psychiatry', org: 'University of Arizona', location: 'Tucson, AZ', bio: 'Dr. Francisco Moreno conducted the first FDA-approved study of psilocybin since the 1970s, investigating its effects on obsessive-compulsive disorder in 2006. This study, along with the Johns Hopkins work, helped reopen the door to psychedelic research. He continues to study psilocybin at the University of Arizona.', expertise: ['OCD', 'Psilocybin', 'Clinical Trials', 'Psychiatry'], papers: 60, citations: '4,000+', image: '👨‍⚕️' },
-        { id: 33, name: 'Dr. Chris Stauffer', role: 'Researcher', title: 'Associate Professor', org: 'Oregon Health Sciences', location: 'Portland, OR', bio: 'Dr. Chris Stauffer is an Associate Professor studying MDMA-assisted therapy for PTSD, particularly in military veterans. He has conducted research at the VA Portland and is a leader in the field of psychedelic therapy for veterans. He frequently speaks on the challenges and opportunities of bringing psychedelics to veteran populations.', expertise: ['PTSD', 'Veterans Health', 'MDMA', 'Clinical Trials'], papers: 45, citations: '3,000+', image: '👨‍⚕️' },
-        { id: 34, name: 'Dr. Michael Silver', role: 'Researcher', title: 'Director', org: 'UC Berkeley Center for Psychedelics', location: 'Berkeley, CA', bio: 'Dr. Michael Silver directs the UC Berkeley Center for the Science of Psychedelics, launched in 2020 with $1.25M in funding. The center focuses on basic neuroscience research, training, and public education. It is one of the few academic centers studying psychedelics through a multidisciplinary lens including philosophy, law, and ethics.', expertise: ['Neuroscience', 'Vision Science', 'Consciousness', 'Education'], papers: 80, citations: '6,000+', image: '👨‍🔬' },
-        { id: 35, name: 'Dr. Bill Richards', role: 'Clinician', title: 'Psychologist', org: 'Johns Hopkins', location: 'Baltimore, MD', bio: 'Dr. Bill Richards is a clinical psychologist at Johns Hopkins who has guided more psychedelic sessions than almost anyone alive. He began researching psychedelics at Spring Grove Hospital in the 1960s before the research was shut down, and returned to the field when Johns Hopkins reopened studies in 2000. His book "Sacred Knowledge" distills decades of wisdom on facilitating transformative experiences.', expertise: ['Clinical Psychology', 'Session Facilitation', 'Mystical Experience', 'Psilocybin'], papers: 30, citations: '3,000+', image: '👨‍⚕️' },
-        { id: 36, name: 'Dr. Stephen Ross', role: 'Researcher', title: 'Associate Professor', org: 'NYU Langone', location: 'New York, NY', bio: 'Dr. Stephen Ross is an Associate Professor of Psychiatry at NYU Langone who led landmark research on psilocybin for cancer-related existential distress. His 2016 study showed that a single psilocybin session produced rapid, sustained reductions in anxiety and depression in cancer patients—effects lasting 6 months or more in most participants.', expertise: ['Cancer Distress', 'Psilocybin', 'Anxiety', 'Palliative Care'], papers: 70, citations: '6,000+', image: '👨‍⚕️' },
-        { id: 37, name: 'Michael Pollan', role: 'Advocate', title: 'Author & Journalist', org: 'Independent', location: 'Berkeley, CA', bio: 'Michael Pollan is a bestselling author whose 2018 book "How to Change Your Mind" brought psychedelic research to mainstream audiences and sparked widespread interest in therapeutic applications. The book was adapted into a Netflix documentary series. A journalism professor at UC Berkeley, Pollan\'s work has been instrumental in shifting public perception of psychedelics from counterculture drugs to legitimate medicine.', expertise: ['Science Writing', 'Journalism', 'Public Education'], papers: 0, citations: 'N/A', image: '📚' },
-        { id: 38, name: 'Tim Ferriss', role: 'Investor', title: 'Author & Investor', org: 'Independent', location: 'Austin, TX', bio: 'Tim Ferriss, bestselling author and investor, has donated over $5 million to psychedelic research, primarily at Johns Hopkins and Imperial College London. His 2017 donation helped launch the Johns Hopkins center. Through his podcast and platform, he has brought psychedelic science to millions of listeners and helped destigmatize the field. He publicly credits psychedelics with helping his own mental health.', expertise: ['Philanthropy', 'Investment', 'Media', 'Advocacy'], papers: 0, citations: 'N/A', image: '🎙️' },
-        { id: 39, name: 'Dr. Charles Raison', role: 'Researcher', title: 'Director of Clinical Research', org: 'Usona Institute', location: 'Madison, WI', bio: 'Dr. Charles Raison is the Director of Clinical Research at the Usona Institute and a Professor at the University of Wisconsin-Madison. He oversees Usona\'s Phase 2 trials of psilocybin for major depressive disorder. His research background spans psychoneuroimmunology, meditation, and the mind-body connection—bringing a unique perspective to psychedelic medicine.', expertise: ['Depression', 'Psychoneuroimmunology', 'Psilocybin', 'Clinical Trials'], papers: 200, citations: '25,000+', image: '👨‍🔬' },
-        { id: 40, name: 'Dustin Robinson', role: 'Investor', title: 'Managing Partner', org: 'Iter Investments', location: 'Fort Lauderdale, FL', bio: 'Dustin Robinson is the Managing Partner of Iter Investments, a venture capital firm focused on psychedelics, and co-founder of Nucleus. A former cannabis industry attorney, he pivoted to psychedelics seeing similar opportunities for reform. Iter has invested in numerous companies including the entities that became Neuly and Psychedelic Invest. He advocates for evidence-based approaches to psychedelic medicine.', expertise: ['Investment', 'Cannabis Law', 'Business Development'], papers: 0, citations: 'N/A', image: '👨‍💼' },
-      ];
+      const apiData = useApiData();
+      const people = (apiData?.people || []).map(normalizePerson);
 
       const savedPeople = people.slice(0, 3);
 
@@ -1477,7 +1249,12 @@
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '20px', marginBottom: '40px' }}>
-              {[{ value: '500+', label: 'Total Professionals', color: '#7dd3c0' }, { value: '150+', label: 'Researchers', color: '#a8c5e2' }, { value: '80+', label: 'Executives', color: '#f0b775' }, { value: '50+', label: 'Clinicians', color: '#d4a5c9' }].map((stat, i) => (
+              {[
+                { value: String(people.length), label: 'Total Professionals', color: '#7dd3c0' },
+                { value: String(people.filter(p => p.role === 'Researcher').length), label: 'Researchers', color: '#a8c5e2' },
+                { value: String(people.filter(p => p.role === 'Executive').length), label: 'Executives', color: '#f0b775' },
+                { value: String(people.filter(p => p.role === 'Clinician').length), label: 'Clinicians', color: '#d4a5c9' }
+              ].map((stat, i) => (
                 <div key={i} style={{ ...sharedStyles.card, textAlign: 'center' }}>
                   <div style={{ fontFamily: '"Fraunces", serif', fontSize: '32px', fontWeight: 600, color: stat.color }}>{stat.value}</div>
                   <div style={{ fontSize: '14px', color: '#6b7370' }}>{stat.label}</div>
@@ -2032,6 +1809,13 @@
 
     // RESEARCH AGENT PAGE - Full Featured
     const ResearchAgentPage = ({ user }) => {
+      const apiData = useApiData();
+      const papers = apiData?.researchPapers || [];
+      const paperCount = apiData?.stats?.counts?.researchPapers ?? papers.length;
+      const studyCount = apiData?.stats?.counts?.clinicalTrials ?? 0;
+      const journalCount = new Set(papers.map(p => p.journal).filter(Boolean)).size;
+      const citationTotal = papers.reduce((sum, p) => sum + (p.citationCount || 0), 0);
+      const fmtK = (n) => n >= 1000 ? `${Math.round(n / 1000)}K` : String(n);
       const [activeTab, setActiveTab] = useState('chat');
       const [messages, setMessages] = useState([]);
       const [input, setInput] = useState('');
@@ -2239,7 +2023,12 @@
             <div style={{ marginBottom: '32px' }}>
               <div style={{ fontSize: '11px', fontWeight: 600, color: '#6b7370', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '16px' }}>Database Stats</div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                {[{ value: '12,450', label: 'Papers' }, { value: '890', label: 'Journals' }, { value: '2,400', label: 'Studies' }, { value: '45K', label: 'Citations' }].map((stat, i) => (
+                {[
+                  { value: paperCount.toLocaleString(), label: 'Papers' },
+                  { value: String(journalCount), label: 'Journals' },
+                  { value: studyCount.toLocaleString(), label: 'Studies' },
+                  { value: fmtK(citationTotal), label: 'Citations' }
+                ].map((stat, i) => (
                   <div key={i} style={{ padding: '14px', background: 'rgba(255,255,255,0.02)', borderRadius: '12px', textAlign: 'center' }}>
                     <div style={{ fontSize: '18px', fontWeight: 600, color: '#7dd3c0' }}>{stat.value}</div>
                     <div style={{ fontSize: '11px', color: '#6b7370' }}>{stat.label}</div>
@@ -2280,7 +2069,7 @@
                       <div style={{ width: '80px', height: '80px', borderRadius: '24px', background: 'rgba(125,211,192,0.15)', border: '1px solid rgba(125,211,192,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '36px', margin: '0 auto 24px' }}>🧠</div>
                       <h1 style={{ fontFamily: '"Fraunces", serif', fontSize: '32px', fontWeight: 600, color: '#fff', marginBottom: '12px' }}>Research Agent</h1>
                       <p style={{ fontSize: '16px', color: '#6b7370', maxWidth: '500px', margin: '0 auto 40px' }}>
-                        Ask me anything about natural medicine research. I have access to 12,450+ papers and clinical studies.
+                        Ask me anything about natural medicine research. I have access to {paperCount.toLocaleString()} papers and {studyCount.toLocaleString()} clinical studies.
                       </p>
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', justifyContent: 'center' }}>
                         {suggestedQuestions.map((q, i) => (
@@ -2536,20 +2325,7 @@
       const phaseFilters = ['All', 'Phase 1', 'Phase 2', 'Phase 3'];
       const statusFilters = ['All', 'Recruiting', 'Active', 'Completed'];
 
-      const studies = [
-        { id: 1, substance: 'Psilocybin', title: 'COMP360 Psilocybin Therapy for Treatment-Resistant Depression', sponsor: 'COMPASS Pathways', phase: 'Phase 3', status: 'Recruiting', location: 'Multiple Sites, USA & UK', enrollment: 924, nctId: 'NCT05624268', color: '#7dd3c0' },
-        { id: 2, substance: 'MDMA', title: 'MDMA-Assisted Therapy for PTSD (MAPP2)', sponsor: 'Lykos Therapeutics / MAPS', phase: 'Phase 3', status: 'Completed', location: 'Multiple Sites, USA', enrollment: 104, nctId: 'NCT04030169', color: '#f0b775' },
-        { id: 3, substance: 'LSD', title: 'MM-120 (LSD) for Generalized Anxiety Disorder', sponsor: 'MindMed', phase: 'Phase 3', status: 'Active', location: 'Multiple Sites, USA', enrollment: 200, nctId: 'NCT05547516', color: '#d4a5c9' },
-        { id: 4, substance: 'Psilocybin', title: 'CYB003 Deuterated Psilocybin for Major Depressive Disorder', sponsor: 'Cybin Inc.', phase: 'Phase 3', status: 'Recruiting', location: '30+ Sites', enrollment: 400, nctId: 'NCT05312151', color: '#7dd3c0' },
-        { id: 5, substance: 'Psilocybin', title: 'Psilocybin-Assisted Therapy for Alcohol Use Disorder', sponsor: 'NYU Langone Health', phase: 'Phase 2', status: 'Recruiting', location: 'New York, NY', enrollment: 200, nctId: 'NCT04620759', color: '#7dd3c0' },
-        { id: 6, substance: 'Ketamine', title: 'Ketamine-Assisted Psychotherapy for Treatment-Resistant Depression', sponsor: 'Johns Hopkins University', phase: 'Phase 2', status: 'Recruiting', location: 'Baltimore, MD', enrollment: 120, color: '#a8c5e2' },
-        { id: 7, substance: 'Ibogaine', title: 'TRP-8802 (Ibogaine Analog) for Opioid Use Disorder', sponsor: 'Atai Life Sciences', phase: 'Phase 1', status: 'Recruiting', location: 'Multiple Sites', enrollment: 30, color: '#98d4a0' },
-        { id: 8, substance: 'Psilocybin', title: 'Psilocybin-Assisted Therapy for Smoking Cessation', sponsor: 'Johns Hopkins University', phase: 'Phase 2', status: 'Recruiting', location: 'Baltimore, MD', enrollment: 80, color: '#7dd3c0' },
-        { id: 9, substance: 'DMT', title: 'VLS-01 (DMT) for Treatment-Resistant Depression', sponsor: 'Atai / Small Pharma', phase: 'Phase 2', status: 'Active', location: 'UK & Europe', enrollment: 100, color: '#e8c898' },
-        { id: 10, substance: 'Psilocybin', title: 'Psilocybin for End-of-Life Anxiety in Cancer Patients', sponsor: 'NYU Langone Health', phase: 'Phase 2', status: 'Recruiting', location: 'New York, NY', enrollment: 60, color: '#7dd3c0' },
-        { id: 11, substance: 'MDMA', title: 'MDMA-Assisted Therapy for Eating Disorders', sponsor: 'MAPS', phase: 'Phase 2', status: 'Recruiting', location: 'Vancouver, Canada', enrollment: 40, color: '#f0b775' },
-        { id: 12, substance: 'Ketamine', title: 'Esketamine (Spravato) vs IV Ketamine for Depression', sponsor: 'Yale University', phase: 'Phase 3', status: 'Active', location: 'New Haven, CT', enrollment: 150, color: '#a8c5e2' },
-      ];
+      const studies = (apiData?.clinicalTrials || []).map(normalizeStudy);
 
       const filteredStudies = studies.filter(s =>
         (selectedSubstance === 'All' || s.substance === selectedSubstance) &&
@@ -2629,25 +2405,10 @@
       const [searchQuery, setSearchQuery] = useState('');
 
       const jobTypes = ['All', 'Research', 'Clinical', 'Business', 'Engineering', 'Policy', 'Marketing'];
-      const locations = ['All', 'Remote', 'USA', 'UK', 'Canada', 'Germany', 'Australia'];
+      const locations = ['All', 'Remote', 'United States', 'United Kingdom', 'Canada', 'Germany', 'Australia'];
 
-      const jobs = [
-        { id: 1, title: 'Senior Clinical Research Scientist', company: 'COMPASS Pathways', companyLogo: '🧭', type: 'Research', location: 'London, UK', salary: '$120K - $160K', posted: '2 days ago', description: 'Lead clinical trial design and execution for COMP360 psilocybin therapy program.', requirements: ['PhD in relevant field', '5+ years clinical trial experience', 'Psychedelic research background preferred'] },
-        { id: 2, title: 'Psychedelic Therapist', company: 'Mindbloom', companyLogo: '🌸', type: 'Clinical', location: 'Remote, USA', salary: '$90K - $120K', posted: '1 week ago', description: 'Provide ketamine-assisted therapy sessions via telemedicine platform.', requirements: ['Licensed therapist (LCSW, LMFT, or equivalent)', 'Psychedelic therapy training', 'Telehealth experience'] },
-        { id: 3, title: 'Director of Business Development', company: 'Atai Life Sciences', companyLogo: '🔬', type: 'Business', location: 'Berlin, Germany', salary: '€150K - €200K', posted: '3 days ago', description: 'Lead strategic partnerships and M&A activities across the portfolio.', requirements: ['10+ years BD experience', 'Biotech/pharma background', 'Network in psychedelic space'] },
-        { id: 4, title: 'Machine Learning Engineer', company: 'Cybin', companyLogo: '🧬', type: 'Engineering', location: 'Toronto, Canada', salary: '$140K - $180K CAD', posted: '5 days ago', description: 'Develop AI models for neuroimaging analysis in psychedelic research.', requirements: ['MS/PhD in ML or related field', 'Experience with fMRI/EEG data', 'Python, TensorFlow/PyTorch'] },
-        { id: 5, title: 'Regulatory Affairs Manager', company: 'MindMed', companyLogo: '💭', type: 'Policy', location: 'New York, NY', salary: '$130K - $160K', posted: '1 day ago', description: 'Manage FDA submissions and regulatory strategy for MM120 program.', requirements: ['5+ years regulatory affairs', 'NDA/BLA submission experience', 'CNS drug development preferred'] },
-        { id: 6, title: 'Clinical Trial Coordinator', company: 'Johns Hopkins', companyLogo: '🏛️', type: 'Clinical', location: 'Baltimore, MD', salary: '$55K - $70K', posted: '2 weeks ago', description: 'Coordinate psilocybin clinical trials at the Center for Psychedelic Research.', requirements: ['Bachelor\'s degree', 'Clinical trial experience', 'IRB protocol knowledge'] },
-        { id: 7, title: 'Medical Science Liaison', company: 'Numinus Wellness', companyLogo: '✨', type: 'Clinical', location: 'Vancouver, Canada', salary: '$110K - $140K CAD', posted: '4 days ago', description: 'Build relationships with healthcare providers and KOLs in psychedelic medicine.', requirements: ['PharmD, MD, or PhD', 'MSL or clinical experience', 'Presentation skills'] },
-        { id: 8, title: 'Content Marketing Manager', company: 'Psychedelic Invest', companyLogo: '📈', type: 'Marketing', location: 'Remote', salary: '$80K - $100K', posted: '1 week ago', description: 'Create content strategy and execute campaigns for psychedelic industry audience.', requirements: ['3+ years content marketing', 'Understanding of psychedelic industry', 'SEO and analytics skills'] },
-        { id: 9, title: 'Preclinical Research Scientist', company: 'Delix Therapeutics', companyLogo: '⚡', type: 'Research', location: 'Boston, MA', salary: '$100K - $130K', posted: '6 days ago', description: 'Conduct in vivo studies for neuroplastogen drug candidates.', requirements: ['PhD in neuroscience or pharmacology', 'Animal model experience', 'Behavioral assay expertise'] },
-        { id: 10, title: 'Ketamine Clinic Director', company: 'Field Trip Health', companyLogo: '🏕️', type: 'Clinical', location: 'Los Angeles, CA', salary: '$150K - $200K', posted: '3 days ago', description: 'Lead clinical operations and team at new LA ketamine therapy clinic.', requirements: ['MD or DO required', 'Psychiatry or anesthesia background', 'Leadership experience'] },
-        { id: 11, title: 'Policy & Advocacy Manager', company: 'MAPS', companyLogo: '🗺️', type: 'Policy', location: 'San Jose, CA', salary: '$85K - $110K', posted: '1 week ago', description: 'Advance psychedelic policy reform through advocacy and stakeholder engagement.', requirements: ['Policy or advocacy experience', 'Knowledge of drug policy', 'Strong communication skills'] },
-        { id: 12, title: 'Integration Coach', company: 'Nue Life Health', companyLogo: '💚', type: 'Clinical', location: 'Remote, USA', salary: '$60K - $80K', posted: '2 days ago', description: 'Provide integration support for at-home ketamine therapy patients.', requirements: ['Coaching certification', 'Psychedelic integration training', 'Telehealth experience'] },
-        { id: 13, title: 'Drug Discovery Chemist', company: 'Gilgamesh Pharmaceuticals', companyLogo: '🏛️', type: 'Research', location: 'New York, NY', salary: '$110K - $145K', posted: '4 days ago', description: 'Design and synthesize novel neuroplastogen compounds.', requirements: ['PhD in medicinal/organic chemistry', 'CNS drug design experience', 'NMDA/5-HT2A expertise preferred'] },
-        { id: 14, title: 'Clinical Operations Associate', company: 'GH Research', companyLogo: '🌀', type: 'Clinical', location: 'Dublin, Ireland', salary: '€50K - €65K', posted: '1 week ago', description: 'Support 5-MeO-DMT clinical trial operations across European sites.', requirements: ['2+ years clinical ops', 'ICH-GCP certified', 'European trial experience'] },
-        { id: 15, title: 'Veterans Program Coordinator', company: 'Heroic Hearts Project', companyLogo: '🎖️', type: 'Clinical', location: 'Houston, TX', salary: '$50K - $65K', posted: '5 days ago', description: 'Coordinate veteran access to psychedelic therapy programs.', requirements: ['Veteran status preferred', 'Case management experience', 'Passion for mental health'] },
-      ];
+      const apiData = useApiData();
+      const jobs = (apiData?.jobs || []).map(normalizeJob);
 
       const filteredJobs = jobs.filter(j => 
         (selectedType === 'All' || j.type === selectedType) &&
@@ -2668,7 +2429,12 @@
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '20px', marginBottom: '40px' }}>
-              {[{ value: '150+', label: 'Open Positions', color: '#7dd3c0' }, { value: '35', label: 'Companies Hiring', color: '#f0b775' }, { value: '12', label: 'Remote Jobs', color: '#a8c5e2' }, { value: '8', label: 'Executive Roles', color: '#d4a5c9' }].map((stat, i) => (
+              {[
+                { value: String(jobs.length), label: 'Open Positions', color: '#7dd3c0' },
+                { value: String(new Set(jobs.map(j => j.company)).size), label: 'Companies Hiring', color: '#f0b775' },
+                { value: String(jobs.filter(j => /remote/i.test(j.location)).length), label: 'Remote Jobs', color: '#a8c5e2' },
+                { value: String(jobs.filter(j => /director|head|chief|vp|vice president/i.test(j.title)).length), label: 'Executive Roles', color: '#d4a5c9' }
+              ].map((stat, i) => (
                 <div key={i} style={{ ...sharedStyles.card, textAlign: 'center' }}>
                   <div style={{ fontFamily: '"Fraunces", serif', fontSize: '32px', fontWeight: 600, color: stat.color }}>{stat.value}</div>
                   <div style={{ fontSize: '14px', color: '#6b7370' }}>{stat.label}</div>
@@ -2730,20 +2496,8 @@
       const eventTypes = ['All', 'Conference', 'Webinar', 'Workshop', 'Summit', 'Meetup'];
       const formats = ['All', 'In-Person', 'Virtual', 'Hybrid'];
 
-      const events = [
-        { id: 1, title: 'Psychedelic Science 2025', type: 'Conference', format: 'In-Person', date: 'Jun 16-20, 2025', location: 'Denver, CO', host: 'MAPS', description: 'The world\'s largest conference on psychedelic research, medicine, policy, and culture. Featuring 400+ speakers and 10,000+ attendees.', price: '$549+', image: '🌐', featured: true, attendees: '10,000+' },
-        { id: 2, title: 'Healing October 7th: MDMA for PTSD in Israel', type: 'Webinar', format: 'Virtual', date: 'Jan 30, 2025', location: 'Online', host: 'MAPS Israel & Neuly', description: 'Discussion on using MDMA-assisted therapy for treating trauma in Israeli communities.', price: 'Free', image: '🎙️', featured: false, attendees: '500+' },
-        { id: 3, title: 'Neuroplasticity and Psychedelics', type: 'Webinar', format: 'Virtual', date: 'Jan 15, 2025', location: 'Online', host: 'Wondermed & Neuly', description: 'Expert panel on how ketamine and psychedelic medicines impact brain plasticity and mental health.', price: 'Free', image: '🧠', featured: false, attendees: '300+' },
-        { id: 4, title: 'ICPR 2025', type: 'Conference', format: 'Hybrid', date: 'Sep 18-21, 2025', location: 'Barcelona, Spain', host: 'ICPR', description: 'Interdisciplinary Conference on Psychedelic Research bringing together scientists, clinicians, and advocates from around the world.', price: '€400+', image: '🇪🇸', featured: true, attendees: '2,000+' },
-        { id: 5, title: 'Ketamine Therapy Best Practices', type: 'Workshop', format: 'In-Person', date: 'Feb 8, 2025', location: 'New York, NY', host: 'Journey Clinical', description: 'Hands-on workshop for clinicians on ketamine-assisted psychotherapy protocols and integration.', price: '$299', image: '💊', featured: false, attendees: '50' },
-        { id: 6, title: 'Psychedelic Investor Summit', type: 'Summit', format: 'In-Person', date: 'Mar 12-13, 2025', location: 'Miami, FL', host: 'Psychedelic Finance', description: 'Connect with founders, investors, and industry leaders shaping the future of psychedelic medicine.', price: '$999', image: '📈', featured: true, attendees: '500+' },
-        { id: 7, title: 'Integration Circle: Monthly Meetup', type: 'Meetup', format: 'Virtual', date: 'Every 2nd Tuesday', location: 'Online', host: 'Psychedelic Support', description: 'Monthly community gathering for sharing and integrating psychedelic experiences in a safe space.', price: 'Free', image: '🔄', featured: false, attendees: '100+' },
-        { id: 8, title: 'Breaking Convention 2025', type: 'Conference', format: 'In-Person', date: 'Aug 15-17, 2025', location: 'London, UK', host: 'Breaking Convention', description: 'Multidisciplinary conference exploring consciousness, psychedelics, and culture in Europe\'s premier event.', price: '£200+', image: '🇬🇧', featured: true, attendees: '1,500+' },
-        { id: 9, title: 'Psilocybin Therapy Training', type: 'Workshop', format: 'In-Person', date: 'Apr 5-7, 2025', location: 'Oakland, CA', host: 'Fluence', description: 'Comprehensive 3-day training program for therapists on psilocybin-assisted therapy fundamentals.', price: '$1,200', image: '🍄', featured: false, attendees: '30' },
-        { id: 10, title: 'SXSW: Psychedelics Track', type: 'Conference', format: 'In-Person', date: 'Mar 7-15, 2025', location: 'Austin, TX', host: 'SXSW', description: 'Sessions on psychedelic medicine, policy, and business at the annual SXSW festival.', price: 'Varies', image: '🎸', featured: false, attendees: '500+' },
-        { id: 11, title: 'Microdosing Research Update', type: 'Webinar', format: 'Virtual', date: 'Feb 20, 2025', location: 'Online', host: 'Imperial College London', description: 'Latest findings from microdosing research with Dr. David Erritzoe and team.', price: 'Free', image: '🔬', featured: false, attendees: '1,000+' },
-        { id: 12, title: 'Veterans Healing Retreat', type: 'Workshop', format: 'In-Person', date: 'Mar 22-29, 2025', location: 'Jamaica', host: 'Heroic Hearts Project', description: 'Week-long psilocybin retreat for military veterans seeking healing from PTSD and trauma.', price: 'Scholarship Available', image: '🎖️', featured: false, attendees: '15' },
-      ];
+      const apiData = useApiData();
+      const events = (apiData?.events || []).map(normalizeEvent);
 
       const filteredEvents = events.filter(e => 
         (selectedType === 'All' || e.type === selectedType) &&
@@ -2766,7 +2520,12 @@
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '20px', marginBottom: '40px' }}>
-              {[{ value: '50+', label: 'Upcoming Events', color: '#7dd3c0' }, { value: '12', label: 'Conferences', color: '#f0b775' }, { value: '25', label: 'Webinars', color: '#a8c5e2' }, { value: '8', label: 'Workshops', color: '#d4a5c9' }].map((stat, i) => (
+              {[
+                { value: String(events.length), label: 'Upcoming Events', color: '#7dd3c0' },
+                { value: String(events.filter(e => e.type === 'Conference').length), label: 'Conferences', color: '#f0b775' },
+                { value: String(events.filter(e => e.type === 'Webinar').length), label: 'Webinars', color: '#a8c5e2' },
+                { value: String(events.filter(e => e.type === 'Workshop').length), label: 'Workshops', color: '#d4a5c9' }
+              ].map((stat, i) => (
                 <div key={i} style={{ ...sharedStyles.card, textAlign: 'center' }}>
                   <div style={{ fontFamily: '"Fraunces", serif', fontSize: '32px', fontWeight: 600, color: stat.color }}>{stat.value}</div>
                   <div style={{ fontSize: '14px', color: '#6b7370' }}>{stat.label}</div>
@@ -2926,7 +2685,12 @@
       const { usingApi, loading } = apiData;
 
       // On mobile/tablet the pill would collide with the bottom tab bar
-      if (loading || isMobile) return null;
+      if (isMobile) return null;
+
+      // Connected → teal "Live Data"; connecting/retrying → amber. The provider
+      // keeps retrying in the background, so this resolves itself when the API answers.
+      const color = usingApi ? '#7dd3c0' : '#f0b775';
+      const label = usingApi ? 'Live Data' : loading ? 'Connecting…' : 'Reconnecting…';
 
       return (
         <div style={{
@@ -2938,20 +2702,20 @@
           alignItems: 'center',
           gap: '8px',
           padding: '8px 16px',
-          background: usingApi ? 'rgba(125, 211, 192, 0.15)' : 'rgba(255, 255, 255, 0.05)',
-          border: `1px solid ${usingApi ? 'rgba(125, 211, 192, 0.3)' : 'rgba(255, 255, 255, 0.1)'}`,
+          background: `${color}26`,
+          border: `1px solid ${color}4d`,
           borderRadius: '20px',
           fontSize: '12px',
-          color: usingApi ? '#7dd3c0' : '#6b7370'
+          color
         }}>
           <div style={{
             width: '8px',
             height: '8px',
             borderRadius: '50%',
-            background: usingApi ? '#7dd3c0' : '#6b7370',
-            animation: usingApi ? 'pulse 2s ease-in-out infinite' : 'none'
+            background: color,
+            animation: 'pulse 2s ease-in-out infinite'
           }} />
-          {usingApi ? 'Live Data' : 'Static Data'}
+          {label}
         </div>
       );
     };
