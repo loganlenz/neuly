@@ -11,7 +11,23 @@ export type DataType =
   | 'people'
   | 'jobs'
   | 'events'
-  | 'educational_resources';
+  | 'educational_resources'
+  | 'legislation'
+  | 'funding_events'
+  | 'grants';
+
+export const ALL_DATA_TYPES: readonly DataType[] = [
+  'clinical_trials',
+  'research_papers',
+  'companies',
+  'people',
+  'jobs',
+  'events',
+  'educational_resources',
+  'legislation',
+  'funding_events',
+  'grants'
+];
 
 interface StorageOptions {
   baseDir?: string;
@@ -292,15 +308,7 @@ export class DataStorage implements StorageBackend {
    * Clear all data
    */
   async clearAll(): Promise<void> {
-    const types: DataType[] = [
-      'clinical_trials',
-      'research_papers',
-      'companies',
-      'people',
-      'jobs',
-      'events',
-      'educational_resources'
-    ];
+    const types: readonly DataType[] = ALL_DATA_TYPES;
 
     for (const type of types) {
       await this.clear(type);
@@ -313,15 +321,7 @@ export class DataStorage implements StorageBackend {
    * Export all data as a single JSON object
    */
   async exportAll(): Promise<Record<DataType, CrawledData[]>> {
-    const types: DataType[] = [
-      'clinical_trials',
-      'research_papers',
-      'companies',
-      'people',
-      'jobs',
-      'events',
-      'educational_resources'
-    ];
+    const types: readonly DataType[] = ALL_DATA_TYPES;
 
     const result: Record<string, CrawledData[]> = {};
 

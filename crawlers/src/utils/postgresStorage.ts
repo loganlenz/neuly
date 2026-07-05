@@ -3,21 +3,13 @@ import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { CrawledData, ChangeEvent } from '../models/types.js';
-import { DataType, DataManifest } from './storage.js';
+import { DataType, DataManifest, ALL_DATA_TYPES } from './storage.js';
 import { StorageBackend, ChangeEventQuery } from './storageBackend.js';
 import { logger } from './logger.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-const ENTITY_TABLES: readonly DataType[] = [
-  'clinical_trials',
-  'research_papers',
-  'companies',
-  'people',
-  'jobs',
-  'events',
-  'educational_resources'
-];
+const ENTITY_TABLES: readonly DataType[] = ALL_DATA_TYPES;
 
 /**
  * Postgres storage backend. Entity payloads are stored as JSONB with

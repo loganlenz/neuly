@@ -21,7 +21,12 @@ const DEFAULT_SCHEDULE: ScheduleEntry[] = [
   { crawler: 'jobs', cron: '30 7 * * *', description: 'ATS job boards — daily 07:30 UTC' },
   { crawler: 'events', cron: '0 8 * * *', description: 'Events — daily 08:00 UTC' },
   { crawler: 'pubmed', cron: '0 5 * * 1', description: 'PubMed — Mondays 05:00 UTC' },
-  { crawler: 'people', cron: '0 5 * * 2', description: 'People — Tuesdays 05:00 UTC' }
+  { crawler: 'people', cron: '0 5 * * 2', description: 'People — Tuesdays 05:00 UTC' },
+  { crawler: 'legislation', cron: '0 9 * * *', description: 'Bills & Federal Register — daily 09:00 UTC' },
+  { crawler: 'funding', cron: '30 9 * * 1-5', description: 'SEC Form D filings — weekdays 09:30 UTC' },
+  { crawler: 'preprints', cron: '0 10 * * *', description: 'bioRxiv/medRxiv preprints — daily 10:00 UTC' },
+  { crawler: 'grants', cron: '0 4 * * 3', description: 'NIH RePORTER grants — Wednesdays 04:00 UTC' },
+  { crawler: 'openalex', cron: '0 3 * * 6', description: 'OpenAlex citation refresh — Saturdays 03:00 UTC' }
 ];
 
 function scheduleFor(entry: ScheduleEntry): string {
@@ -65,12 +70,9 @@ async function main(): Promise<void> {
 
   if (process.env.RUN_ON_START === 'true') {
     logger.info('[Scheduler] RUN_ON_START=true — running all crawlers now');
-    enqueue('clinicaltrials');
-    enqueue('companies');
-    enqueue('jobs');
-    enqueue('events');
-    enqueue('pubmed');
-    enqueue('people');
+    for (const entry of DEFAULT_SCHEDULE) {
+      enqueue(entry.crawler);
+    }
   }
 
   logger.info('[Scheduler] Running. Ctrl+C to stop.');

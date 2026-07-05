@@ -6,10 +6,16 @@ Data collection system for the Neuly psychedelic medicine research platform. Thi
 
 - **ClinicalTrials.gov Crawler** - Fetches psychedelic clinical trials data
 - **PubMed Crawler** - Collects peer-reviewed research papers
+- **Preprint Crawler** - bioRxiv/medRxiv preprints (research 6-18 months ahead of PubMed)
 - **Company Crawler** - Gathers SEC filings and company information
+- **Legislation Crawler** - State bills (LegiScan) + federal rules and notices (Federal Register): the policy tracker
+- **Funding Crawler** - SEC Form D filings: private raises by companies in the space
+- **Grants Crawler** - NIH RePORTER research grants: the leading indicator of future trials
 - **Job Crawler** - Auto-discovers ATS boards (Greenhouse, Lever, Ashby, Workable) for every company in the database and aggregates their postings
 - **Event Crawler** - Tracks conferences, webinars, and industry events
 - **People Crawler** - Profiles key researchers and industry figures
+- **OpenAlex Enrichment** - Refreshes citation counts and open-access flags on stored papers
+- **Readout Calendar** - `/api/readouts` derives expected trial results windows from completion dates — the sector's earnings calendar
 - **Postgres or JSON storage** - Set `DATABASE_URL` to store in Postgres; falls back to JSON files
 - **Diff engine** - Every crawl is compared to the stored state and typed change events (`added` / `updated` / `removed`) are recorded, exposed at `/api/changes`
 - **Scheduler** - `npm run schedule` runs each crawler on its own cron cadence
@@ -35,6 +41,8 @@ cp .env.example .env
 |----------|-------------|----------|
 | `DATABASE_URL` | Postgres connection string; when set, data is stored in Postgres instead of JSON files | No |
 | `NCBI_API_KEY` | API key for PubMed (increases rate limit from 3/sec to 10/sec) | No |
+| `LEGISCAN_API_KEY` | LegiScan key for state bills (free at legiscan.com/legiscan); Federal Register works without it | No |
+| `OPENALEX_MAILTO` | Email for the OpenAlex polite pool (faster, more reliable) | No |
 | `LOG_LEVEL` | Logging level: debug, info, warn, error | No |
 | `RUN_ON_START` | Scheduler: run all crawlers immediately on startup | No |
 | `SCHEDULE_<CRAWLER>` | Scheduler: cron override per crawler, e.g. `SCHEDULE_JOBS="30 7 * * *"` | No |
@@ -85,6 +93,21 @@ npm run crawl:events
 
 # Researcher profiles
 npm run crawl:people
+
+# State bills + Federal Register documents
+npm run crawl:legislation
+
+# SEC Form D funding events
+npm run crawl:funding
+
+# bioRxiv/medRxiv preprints
+npm run crawl:preprints
+
+# NIH research grants
+npm run crawl:grants
+
+# Refresh citation counts from OpenAlex
+npm run enrich:openalex
 ```
 
 ### Run the Scheduler
@@ -179,9 +202,12 @@ The system collects and validates the following data types:
 | Type | Description | Primary Sources |
 |------|-------------|-----------------|
 | `ClinicalTrial` | Clinical study records | ClinicalTrials.gov |
-| `ResearchPaper` | Peer-reviewed publications | PubMed |
+| `ResearchPaper` | Peer-reviewed publications + preprints | PubMed, bioRxiv, medRxiv, OpenAlex |
 | `Company` | Psychedelic medicine companies | SEC EDGAR, manual curation |
-| `JobPosting` | Industry job opportunities | Company career pages |
+| `LegislationBill` | State bills and federal regulatory actions | LegiScan, Federal Register |
+| `FundingEvent` | Private raises (Form D exempt offerings) | SEC EDGAR full-text search |
+| `Grant` | Research grants | NIH RePORTER |
+| `JobPosting` | Industry job opportunities | Company ATS boards (auto-discovered) |
 | `Event` | Conferences and webinars | Manual curation |
 | `Person` | Researchers and executives | PubMed, manual curation |
 

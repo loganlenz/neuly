@@ -22,7 +22,10 @@ const SIGNIFICANT_FIELDS: Partial<Record<DataType, string[]>> = {
   jobs: ['title'],
   people: ['organization', 'title', 'role'],
   events: ['startDate', 'endDate'],
-  educational_resources: []
+  educational_resources: [],
+  legislation: ['status', 'lastAction', 'lastActionDate'],
+  funding_events: ['formType'],
+  grants: ['awardAmount', 'fiscalYear']
 };
 
 const ENTITY_LABELS: Record<DataType, string> = {
@@ -32,7 +35,10 @@ const ENTITY_LABELS: Record<DataType, string> = {
   people: 'person',
   jobs: 'job posting',
   events: 'event',
-  educational_resources: 'educational resource'
+  educational_resources: 'educational resource',
+  legislation: 'bill / regulatory action',
+  funding_events: 'funding event',
+  grants: 'research grant'
 };
 
 /**

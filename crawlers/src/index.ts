@@ -66,7 +66,8 @@ Usage:
 Options:
   --crawler, -c <name>    Specify crawler to run
                           Options: clinicaltrials, pubmed, companies,
-                                   jobs, events, people, all
+                                   jobs, events, people, legislation,
+                                   funding, preprints, grants, openalex, all
   --query, -q <query>     Custom search query
   --output, -o <dir>      Output directory (default: ./data)
   --dry-run               Don't save results
@@ -132,7 +133,14 @@ export { CompanyCrawler } from './crawlers/CompanyCrawler.js';
 export { JobCrawler } from './crawlers/JobCrawler.js';
 export { EventCrawler } from './crawlers/EventCrawler.js';
 export { PeopleCrawler } from './crawlers/PeopleCrawler.js';
+export { LegislationCrawler } from './crawlers/LegislationCrawler.js';
+export { FundingCrawler } from './crawlers/FundingCrawler.js';
+export { PreprintCrawler } from './crawlers/PreprintCrawler.js';
+export { GrantsCrawler } from './crawlers/GrantsCrawler.js';
+export { OpenAlexEnricher } from './enrichment/OpenAlexEnricher.js';
 export { DiffEngine } from './core/DiffEngine.js';
+export { deriveReadoutCalendar } from './core/readouts.js';
+export { detectSubstances } from './utils/substances.js';
 export { DataStorage } from './utils/storage.js';
 export { PostgresStorage } from './utils/postgresStorage.js';
 export { createStorage } from './utils/storageBackend.js';

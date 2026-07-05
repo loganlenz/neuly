@@ -4,14 +4,22 @@ import { CompanyCrawler } from './crawlers/CompanyCrawler.js';
 import { JobCrawler } from './crawlers/JobCrawler.js';
 import { EventCrawler } from './crawlers/EventCrawler.js';
 import { PeopleCrawler } from './crawlers/PeopleCrawler.js';
+import { LegislationCrawler } from './crawlers/LegislationCrawler.js';
+import { FundingCrawler } from './crawlers/FundingCrawler.js';
+import { PreprintCrawler } from './crawlers/PreprintCrawler.js';
+import { GrantsCrawler } from './crawlers/GrantsCrawler.js';
+import { OpenAlexEnricher } from './enrichment/OpenAlexEnricher.js';
 import { DiffEngine } from './core/DiffEngine.js';
 import { CrawlResult } from './core/BaseCrawler.js';
 import { DataType } from './utils/storage.js';
 import { StorageBackend, createStorage } from './utils/storageBackend.js';
 import { logger } from './utils/logger.js';
-import { Company, CrawledData } from './models/types.js';
+import { Company, ResearchPaper, CrawledData } from './models/types.js';
 
-export type CrawlerName = 'clinicaltrials' | 'pubmed' | 'companies' | 'jobs' | 'events' | 'people' | 'all';
+export type CrawlerName =
+  | 'clinicaltrials' | 'pubmed' | 'companies' | 'jobs' | 'events' | 'people'
+  | 'legislation' | 'funding' | 'preprints' | 'grants' | 'openalex'
+  | 'all';
 
 interface CrawlerRun {
   type: DataType;
@@ -107,6 +115,53 @@ export class CrawlerOrchestrator {
       type: 'people',
       fullSnapshot: false,
       run: () => new PeopleCrawler().crawl()
+    });
+
+    this.crawlers.set('legislation', {
+      type: 'legislation',
+      fullSnapshot: false,
+      run: () => new LegislationCrawler().crawl()
+    });
+
+    this.crawlers.set('funding', {
+      type: 'funding_events',
+      fullSnapshot: false,
+      run: () => new FundingCrawler().crawl()
+    });
+
+    // Preprints feed the shared research_papers dataset
+    this.crawlers.set('preprints', {
+      type: 'research_papers',
+      fullSnapshot: false,
+      run: () => new PreprintCrawler().crawl()
+    });
+
+    this.crawlers.set('grants', {
+      type: 'grants',
+      fullSnapshot: false,
+      run: () => new GrantsCrawler().crawl()
+    });
+
+    // Enrichment, not crawling: refreshes citation counts on stored papers.
+    // Returns only changed papers so the upsert (and diff) stay minimal.
+    this.crawlers.set('openalex', {
+      type: 'research_papers',
+      fullSnapshot: false,
+      run: async () => {
+        const startTime = Date.now();
+        const papers = await this.storage.load<ResearchPaper>('research_papers');
+        const updated = await new OpenAlexEnricher().enrich(papers);
+        return {
+          success: true,
+          data: updated,
+          stats: {
+            total: papers.length,
+            successful: updated.length,
+            failed: 0,
+            duration: Date.now() - startTime
+          }
+        };
+      }
     });
   }
 

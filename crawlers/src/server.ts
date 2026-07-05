@@ -15,9 +15,13 @@ import {
   Person,
   JobPosting,
   Event,
+  LegislationBill,
+  FundingEvent,
+  Grant,
   Substance,
   SUBSTANCES
 } from './models/types.js';
+import { deriveReadoutCalendar } from './core/readouts.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -613,6 +617,166 @@ app.get('/api/search', async (req: Request, res: Response) => {
   }
 });
 
+// ============================================
+// LEGISLATION / FUNDING / GRANTS / READOUTS
+// ============================================
+
+/**
+ * Legislation & regulatory tracker: state bills + federal register documents.
+ * Query params: jurisdiction (state code or US-Federal), substance, search, page, limit
+ */
+app.get('/api/legislation', async (req: Request, res: Response) => {
+  try {
+    const bills = await storage.load<LegislationBill>('legislation');
+    let filtered = bills;
+
+    if (req.query.jurisdiction) {
+      const jurisdiction = (req.query.jurisdiction as string).toLowerCase();
+      filtered = filtered.filter(b => b.jurisdiction.toLowerCase() === jurisdiction);
+    }
+    if (req.query.substance) {
+      const substance = (req.query.substance as string).toLowerCase();
+      filtered = filtered.filter(b => b.substances.some(s => s.toLowerCase().includes(substance)));
+    }
+    if (req.query.search) {
+      const search = (req.query.search as string).toLowerCase();
+      filtered = filtered.filter(b =>
+        b.title.toLowerCase().includes(search) ||
+        b.description?.toLowerCase().includes(search) ||
+        b.billNumber.toLowerCase().includes(search)
+      );
+    }
+
+    filtered.sort((a, b) => (b.lastActionDate || '').localeCompare(a.lastActionDate || ''));
+
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = parseInt(req.query.limit as string) || 50;
+    const start = (page - 1) * limit;
+
+    res.json({
+      data: filtered.slice(start, start + limit),
+      total: filtered.length,
+      page,
+      limit,
+      totalPages: Math.ceil(filtered.length / limit)
+    });
+  } catch (error) {
+    logger.error(`Error fetching legislation: ${error}`);
+    res.status(500).json({ error: 'Failed to fetch legislation' });
+  }
+});
+
+/**
+ * Funding events: SEC Form D filings by companies in the space.
+ * Query params: search, since (YYYY-MM-DD), page, limit
+ */
+app.get('/api/funding', async (req: Request, res: Response) => {
+  try {
+    const events = await storage.load<FundingEvent>('funding_events');
+    let filtered = events;
+
+    if (req.query.search) {
+      const search = (req.query.search as string).toLowerCase();
+      filtered = filtered.filter(f => f.companyName.toLowerCase().includes(search));
+    }
+    if (req.query.since) {
+      const since = req.query.since as string;
+      filtered = filtered.filter(f => f.filedAt >= since);
+    }
+
+    filtered.sort((a, b) => b.filedAt.localeCompare(a.filedAt));
+
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = parseInt(req.query.limit as string) || 50;
+    const start = (page - 1) * limit;
+
+    res.json({
+      data: filtered.slice(start, start + limit),
+      total: filtered.length,
+      page,
+      limit,
+      totalPages: Math.ceil(filtered.length / limit)
+    });
+  } catch (error) {
+    logger.error(`Error fetching funding events: ${error}`);
+    res.status(500).json({ error: 'Failed to fetch funding events' });
+  }
+});
+
+/**
+ * Research grants (NIH RePORTER).
+ * Query params: substance, search, fiscalYear, page, limit
+ */
+app.get('/api/grants', async (req: Request, res: Response) => {
+  try {
+    const grants = await storage.load<Grant>('grants');
+    let filtered = grants;
+
+    if (req.query.substance) {
+      const substance = (req.query.substance as string).toLowerCase();
+      filtered = filtered.filter(g => g.substances.some(s => s.toLowerCase().includes(substance)));
+    }
+    if (req.query.fiscalYear) {
+      const year = parseInt(req.query.fiscalYear as string);
+      filtered = filtered.filter(g => g.fiscalYear === year);
+    }
+    if (req.query.search) {
+      const search = (req.query.search as string).toLowerCase();
+      filtered = filtered.filter(g =>
+        g.title.toLowerCase().includes(search) ||
+        g.organization?.toLowerCase().includes(search) ||
+        g.piNames.some(name => name.toLowerCase().includes(search))
+      );
+    }
+
+    filtered.sort((a, b) => (b.awardAmount || 0) - (a.awardAmount || 0));
+
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = parseInt(req.query.limit as string) || 50;
+    const start = (page - 1) * limit;
+
+    res.json({
+      data: filtered.slice(start, start + limit),
+      total: filtered.length,
+      page,
+      limit,
+      totalPages: Math.ceil(filtered.length / limit)
+    });
+  } catch (error) {
+    logger.error(`Error fetching grants: ${error}`);
+    res.status(500).json({ error: 'Failed to fetch grants' });
+  }
+});
+
+/**
+ * Trial readout calendar — expected results windows derived from
+ * clinical trial completion dates, soonest first.
+ * Query params: phase, substance, horizonDays, limit
+ */
+app.get('/api/readouts', async (req: Request, res: Response) => {
+  try {
+    const trials = await storage.load<ClinicalTrial>('clinical_trials');
+    let readouts = deriveReadoutCalendar(trials, {
+      horizonDays: parseInt(req.query.horizonDays as string) || undefined
+    });
+
+    if (req.query.phase) {
+      const phase = (req.query.phase as string).toLowerCase();
+      readouts = readouts.filter(r => r.phase?.toLowerCase().includes(phase));
+    }
+    if (req.query.substance) {
+      const substance = (req.query.substance as string).toLowerCase();
+      readouts = readouts.filter(r => r.substances.some(s => s.toLowerCase().includes(substance)));
+    }
+
+    const limit = parseInt(req.query.limit as string) || 100;
+    res.json({ data: readouts.slice(0, limit), total: readouts.length });
+  } catch (error) {
+    logger.error(`Error deriving readout calendar: ${error}`);
+    res.status(500).json({ error: 'Failed to derive readout calendar' });
+  }
+});
+
 /**
  * Recent change events (diff engine output): what's new, updated, removed.
  * Query params: type (entity type), since (ISO timestamp), limit
@@ -675,6 +839,10 @@ app.listen(PORT, () => {
   logger.info('  GET /api/events          - Events');
   logger.info('  GET /api/search?q=       - Global search');
   logger.info('  GET /api/changes         - Recent change events');
+  logger.info('  GET /api/legislation     - Bills & regulatory actions');
+  logger.info('  GET /api/funding         - SEC Form D funding events');
+  logger.info('  GET /api/grants          - NIH research grants');
+  logger.info('  GET /api/readouts        - Trial readout calendar');
   logger.info(`Storage backend: ${storage.label}`);
   logger.info('='.repeat(50));
 });
