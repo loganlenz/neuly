@@ -344,6 +344,9 @@ export type Person = z.infer<typeof PersonSchema>;
 export type JobPosting = z.infer<typeof JobPostingSchema>;
 export type Event = z.infer<typeof EventSchema>;
 export type EducationalResource = z.infer<typeof EducationalResourceSchema>;
+export type LegislationBill = z.infer<typeof LegislationBillSchema>;
+export type FundingEvent = z.infer<typeof FundingEventSchema>;
+export type Grant = z.infer<typeof GrantSchema>;
 
 // Union type for all crawled data
 export type CrawledData =
@@ -353,7 +356,85 @@ export type CrawledData =
   | Person
   | JobPosting
   | Event
-  | EducationalResource;
+  | EducationalResource
+  | LegislationBill
+  | FundingEvent
+  | Grant;
+
+// Legislation / Regulatory Item Schema
+// State bills (LegiScan) and federal regulatory documents (Federal Register)
+export const LegislationBillSchema = z.object({
+  id: z.string(),
+  jurisdiction: z.string(), // two-letter state code or 'US-Federal'
+  billNumber: z.string(),
+  title: z.string(),
+  description: z.string().optional(),
+  status: z.string().optional(), // e.g. 'Introduced', 'Enacted', 'Rule', 'Proposed Rule', 'Notice'
+  session: z.string().optional(),
+  agencies: z.array(z.string()).optional(), // federal documents only
+  substances: z.array(z.enum(SUBSTANCES)),
+  lastAction: z.string().optional(),
+  lastActionDate: z.string().optional(),
+  url: z.string().url(),
+  source: z.string(),
+  crawledAt: z.string()
+});
+
+// Funding Event Schema — SEC Form D (exempt offering) filings
+export const FundingEventSchema = z.object({
+  id: z.string(),
+  companyName: z.string(),
+  cik: z.string().optional(),
+  formType: z.string(), // 'D' or 'D/A'
+  filedAt: z.string(),
+  accessionNumber: z.string(),
+  substances: z.array(z.enum(SUBSTANCES)).optional(),
+  matchedTerms: z.array(z.string()).optional(),
+  url: z.string().url(),
+  source: z.string(),
+  crawledAt: z.string()
+});
+
+// Research Grant Schema — NIH RePORTER awards
+export const GrantSchema = z.object({
+  id: z.string(),
+  projectNumber: z.string(),
+  title: z.string(),
+  abstract: z.string().optional(),
+  piNames: z.array(z.string()),
+  organization: z.string().optional(),
+  agency: z.string().optional(),
+  fiscalYear: z.number().optional(),
+  awardAmount: z.number().optional(),
+  startDate: z.string().optional(),
+  endDate: z.string().optional(),
+  substances: z.array(z.enum(SUBSTANCES)),
+  url: z.string().url().optional(),
+  source: z.string(),
+  crawledAt: z.string()
+});
+
+// Change Event Schema — emitted by the diff engine whenever a crawl
+// adds, updates, or removes an entity. Powers alerts and the newsletter.
+export const CHANGE_TYPES = ['added', 'updated', 'removed'] as const;
+export type ChangeType = typeof CHANGE_TYPES[number];
+
+export const ChangeEventSchema = z.object({
+  id: z.string(),
+  entityType: z.string(),
+  entityId: z.string(),
+  entityTitle: z.string(),
+  changeType: z.enum(CHANGE_TYPES),
+  fields: z.array(z.object({
+    field: z.string(),
+    from: z.string().optional(),
+    to: z.string().optional()
+  })).optional(),
+  summary: z.string(),
+  detectedAt: z.string()
+});
+
+export type ChangeEvent = z.infer<typeof ChangeEventSchema>;
 
 // ============================================
 // SEARCH TERMS FOR CRAWLERS

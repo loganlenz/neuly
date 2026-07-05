@@ -7,10 +7,10 @@
  * Usage: npx tsx src/seed.ts
  */
 import 'dotenv/config';
-import { DataStorage } from './utils/storage.js';
+import { createStorage } from './utils/storageBackend.js';
 import { logger } from './utils/logger.js';
 
-const storage = new DataStorage();
+const storage = await createStorage();
 
 // ============================================
 // COMPANIES
@@ -797,9 +797,11 @@ async function seed() {
 
   logger.info('');
   logger.info('='.repeat(50));
-  logger.info('Seed complete!');
+  logger.info(`Seed complete! (storage: ${storage.label})`);
   logger.info('Run `npm run server` to start the API');
   logger.info('='.repeat(50));
+
+  await storage.close();
 }
 
 seed().catch(console.error);

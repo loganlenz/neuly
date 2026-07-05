@@ -1,6 +1,7 @@
 import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
-import { CrawledData, ClinicalTrial, ResearchPaper, Company, Person, JobPosting, Event, EducationalResource } from '../models/types.js';
+import { CrawledData, ChangeEvent, ClinicalTrial, ResearchPaper, Company, Person, JobPosting, Event, EducationalResource } from '../models/types.js';
+import type { StorageBackend, ChangeEventQuery } from './storageBackend.js';
 import { logger } from './logger.js';
 
 export type DataType =
@@ -10,7 +11,23 @@ export type DataType =
   | 'people'
   | 'jobs'
   | 'events'
-  | 'educational_resources';
+  | 'educational_resources'
+  | 'legislation'
+  | 'funding_events'
+  | 'grants';
+
+export const ALL_DATA_TYPES: readonly DataType[] = [
+  'clinical_trials',
+  'research_papers',
+  'companies',
+  'people',
+  'jobs',
+  'events',
+  'educational_resources',
+  'legislation',
+  'funding_events',
+  'grants'
+];
 
 interface StorageOptions {
   baseDir?: string;
@@ -18,7 +35,7 @@ interface StorageOptions {
   prettyPrint?: boolean;
 }
 
-interface DataManifest {
+export interface DataManifest {
   lastUpdated: string;
   counts: Record<DataType, number>;
   crawlHistory: Array<{
@@ -33,10 +50,14 @@ interface DataManifest {
  * Storage utility for persisting crawled data
  * Supports JSON and JSONL formats with incremental updates
  */
-export class DataStorage {
+export class DataStorage implements StorageBackend {
   private baseDir: string;
   private format: 'json' | 'jsonl';
   private prettyPrint: boolean;
+
+  get label(): string {
+    return `json:${this.baseDir}`;
+  }
 
   constructor(options: StorageOptions = {}) {
     this.baseDir = options.baseDir || join(process.cwd(), 'data');
@@ -219,6 +240,63 @@ export class DataStorage {
   }
 
   /**
+   * Append change events to the change log (change_events.json).
+   * The log is capped to the most recent 10,000 events.
+   */
+  async saveChangeEvents(events: ChangeEvent[]): Promise<void> {
+    if (events.length === 0) return;
+
+    const filePath = join(this.baseDir, 'change_events.json');
+    let existing: ChangeEvent[] = [];
+
+    if (existsSync(filePath)) {
+      try {
+        existing = JSON.parse(readFileSync(filePath, 'utf-8'));
+      } catch {
+        logger.warn('[Storage] Could not parse change_events.json; starting fresh');
+      }
+    }
+
+    const seen = new Set(existing.map(e => e.id));
+    const combined = [...existing, ...events.filter(e => !seen.has(e.id))].slice(-10000);
+    writeFileSync(filePath, JSON.stringify(combined, null, 2), 'utf-8');
+    logger.info(`[Storage] Recorded ${events.length} change events`);
+  }
+
+  /**
+   * Load change events, newest first
+   */
+  async loadChangeEvents(query: ChangeEventQuery = {}): Promise<ChangeEvent[]> {
+    const filePath = join(this.baseDir, 'change_events.json');
+    if (!existsSync(filePath)) return [];
+
+    let events: ChangeEvent[];
+    try {
+      events = JSON.parse(readFileSync(filePath, 'utf-8'));
+    } catch {
+      return [];
+    }
+
+    let filtered = events;
+    if (query.entityType) {
+      filtered = filtered.filter(e => e.entityType === query.entityType);
+    }
+    if (query.since) {
+      filtered = filtered.filter(e => e.detectedAt >= query.since!);
+    }
+
+    filtered.sort((a, b) => b.detectedAt.localeCompare(a.detectedAt));
+    return filtered.slice(0, query.limit ?? 200);
+  }
+
+  /**
+   * No held resources for file storage
+   */
+  async close(): Promise<void> {
+    // no-op
+  }
+
+  /**
    * Clear all data for a type
    */
   async clear(type: DataType): Promise<void> {
@@ -230,15 +308,7 @@ export class DataStorage {
    * Clear all data
    */
   async clearAll(): Promise<void> {
-    const types: DataType[] = [
-      'clinical_trials',
-      'research_papers',
-      'companies',
-      'people',
-      'jobs',
-      'events',
-      'educational_resources'
-    ];
+    const types: readonly DataType[] = ALL_DATA_TYPES;
 
     for (const type of types) {
       await this.clear(type);
@@ -251,15 +321,7 @@ export class DataStorage {
    * Export all data as a single JSON object
    */
   async exportAll(): Promise<Record<DataType, CrawledData[]>> {
-    const types: DataType[] = [
-      'clinical_trials',
-      'research_papers',
-      'companies',
-      'people',
-      'jobs',
-      'events',
-      'educational_resources'
-    ];
+    const types: readonly DataType[] = ALL_DATA_TYPES;
 
     const result: Record<string, CrawledData[]> = {};
 

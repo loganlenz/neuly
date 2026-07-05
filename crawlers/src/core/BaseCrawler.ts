@@ -106,10 +106,16 @@ export abstract class BaseCrawler<T extends CrawledData> {
   }
 
   /**
-   * Generate a unique ID for a crawled item
+   * Generate a stable, deterministic ID for a crawled item.
+   * The same entity must map to the same ID on every crawl so that
+   * storage upserts deduplicate and the diff engine can detect changes.
    */
   protected generateId(prefix: string, identifier: string): string {
-    return `${prefix}_${identifier}_${Date.now()}`;
+    const normalized = identifier
+      .toLowerCase()
+      .replace(/[^a-z0-9-]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+    return `${prefix}_${normalized}`;
   }
 
   /**

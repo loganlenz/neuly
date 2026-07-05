@@ -1,0 +1,55 @@
+import { Substance } from '../models/types.js';
+
+/** Keyword patterns for tagging free text with tracked substances */
+const SUBSTANCE_PATTERNS: Array<[Substance, RegExp]> = [
+  ['Psilocybin', /psilocybin|psilocin|magic mushroom/i],
+  ['MDMA', /\bmdma\b|midomafetamine|ecstasy-assisted|3,4-methylenedioxymethamphetamine/i],
+  ['Ketamine', /ketamine|esketamine|spravato/i],
+  ['LSD', /\blsd\b|lysergic acid diethylamide|lysergide/i],
+  ['5-MeO-DMT', /5-meo-dmt|5-methoxy-n,n-dimethyltryptamine|mebufotenin/i],
+  ['DMT', /\bdmt\b|n,n-dimethyltryptamine/i],
+  ['Ibogaine', /ibogaine|iboga\b|noribogaine/i],
+  ['Ayahuasca', /ayahuasca|banisteriopsis/i],
+  ['Cannabis', /cannabis|cannabinoid|marijuana|\bthc\b|\bcbd\b/i],
+  ['Mescaline', /mescaline|peyote/i]
+];
+
+/**
+ * Detect tracked substances mentioned in free text.
+ * 5-MeO-DMT is matched before DMT so the more specific tag wins,
+ * but a plain "DMT" mention still tags DMT.
+ */
+export function detectSubstances(text: string | undefined | null): Substance[] {
+  if (!text) return [];
+
+  const found: Substance[] = [];
+  for (const [substance, pattern] of SUBSTANCE_PATTERNS) {
+    if (pattern.test(text)) {
+      found.push(substance);
+    }
+  }
+
+  // A 5-MeO-DMT match also trips the generic DMT pattern; drop the
+  // generic tag unless plain DMT is mentioned outside the 5-MeO context.
+  if (found.includes('5-MeO-DMT') && found.includes('DMT')) {
+    const without5meo = text.replace(/5-meo-dmt|5-methoxy-n,n-dimethyltryptamine/gi, '');
+    if (!/\bdmt\b|n,n-dimethyltryptamine/i.test(without5meo)) {
+      found.splice(found.indexOf('DMT'), 1);
+    }
+  }
+
+  return found;
+}
+
+/** Search terms used by crawlers that query APIs per-substance */
+export const SUBSTANCE_QUERY_TERMS = [
+  'psilocybin',
+  'MDMA',
+  'ketamine',
+  'LSD',
+  'DMT',
+  'ibogaine',
+  'ayahuasca',
+  'mescaline',
+  'psychedelic'
+] as const;
