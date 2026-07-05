@@ -7,9 +7,12 @@ Data collection system for the Neuly psychedelic medicine research platform. Thi
 - **ClinicalTrials.gov Crawler** - Fetches psychedelic clinical trials data
 - **PubMed Crawler** - Collects peer-reviewed research papers
 - **Company Crawler** - Gathers SEC filings and company information
-- **Job Crawler** - Aggregates job postings from company career pages
+- **Job Crawler** - Auto-discovers ATS boards (Greenhouse, Lever, Ashby, Workable) for every company in the database and aggregates their postings
 - **Event Crawler** - Tracks conferences, webinars, and industry events
 - **People Crawler** - Profiles key researchers and industry figures
+- **Postgres or JSON storage** - Set `DATABASE_URL` to store in Postgres; falls back to JSON files
+- **Diff engine** - Every crawl is compared to the stored state and typed change events (`added` / `updated` / `removed`) are recorded, exposed at `/api/changes`
+- **Scheduler** - `npm run schedule` runs each crawler on its own cron cadence
 
 ## Installation
 
@@ -30,8 +33,23 @@ cp .env.example .env
 
 | Variable | Description | Required |
 |----------|-------------|----------|
+| `DATABASE_URL` | Postgres connection string; when set, data is stored in Postgres instead of JSON files | No |
 | `NCBI_API_KEY` | API key for PubMed (increases rate limit from 3/sec to 10/sec) | No |
 | `LOG_LEVEL` | Logging level: debug, info, warn, error | No |
+| `RUN_ON_START` | Scheduler: run all crawlers immediately on startup | No |
+| `SCHEDULE_<CRAWLER>` | Scheduler: cron override per crawler, e.g. `SCHEDULE_JOBS="30 7 * * *"` | No |
+
+### Postgres
+
+```bash
+# create the database, then:
+DATABASE_URL=postgresql://user:pass@host:5432/neuly npm run db:migrate
+DATABASE_URL=postgresql://user:pass@host:5432/neuly npm run seed
+```
+
+The schema (`src/db/schema.sql`) stores each entity as JSONB with provenance
+columns (`source`, `first_seen_at`, `updated_at`), plus `change_events`
+(diff engine output) and `crawl_runs` (crawl history) tables.
 
 To get an NCBI API key:
 1. Go to https://www.ncbi.nlm.nih.gov/account/
@@ -67,6 +85,15 @@ npm run crawl:events
 
 # Researcher profiles
 npm run crawl:people
+```
+
+### Run the Scheduler
+
+Runs each crawler on its own cadence (trials daily, SEC filings on weekdays,
+jobs daily, PubMed weekly, ...). Override any cadence with `SCHEDULE_<CRAWLER>`.
+
+```bash
+npm run schedule
 ```
 
 ### Development Mode
@@ -139,8 +166,11 @@ crawlers/
 - **Rate Limit**: 10 requests/second
 
 ### Job Boards
-- **Sources**: Greenhouse, Lever APIs from company career pages
-- **Companies**: COMPASS Pathways, MindMed, Cybin, Atai, Numinus
+- **Sources**: Greenhouse, Lever, Ashby, and Workable public APIs
+- **Discovery**: ATS boards are probed automatically for every company in the
+  companies table (slug candidates derived from the company name); hits and
+  misses are cached in `data/ats_boards.json`. A seed list (COMPASS Pathways,
+  MindMed, Cybin, Atai, Numinus) is always crawled.
 
 ## Data Types
 

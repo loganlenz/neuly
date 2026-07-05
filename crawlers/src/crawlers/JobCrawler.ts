@@ -6,48 +6,35 @@ import {
   Substance,
   SUBSTANCES
 } from '../models/types.js';
+import { AtsDiscovery, AtsBoard, AtsProvider } from '../utils/atsDiscovery.js';
 import { logger } from '../utils/logger.js';
 
-interface JobSource {
-  name: string;
-  type: 'api' | 'rss' | 'html';
-  url: string;
-  searchParams?: Record<string, string>;
+export interface JobCrawlerOptions {
+  /**
+   * Company names to auto-discover ATS boards for (usually the names
+   * from the companies table). When omitted, only seed boards are crawled.
+   */
+  companies?: string[];
+  /** Directory for the discovery cache (defaults to ./data) */
+  cacheDir?: string;
 }
 
 /**
- * Crawler for job postings related to psychedelic medicine industry
- * Aggregates from multiple job boards and company career pages
+ * Crawler for job postings related to psychedelic medicine industry.
+ * Crawls a set of seed ATS boards plus any boards auto-discovered from
+ * the companies table via the public Greenhouse/Lever/Ashby/Workable APIs.
  */
 export class JobCrawler extends BaseCrawler<JobPosting> {
-  // Job sources to crawl
-  private static readonly JOB_SOURCES: JobSource[] = [
-    {
-      name: 'Greenhouse - COMPASS Pathways',
-      type: 'api',
-      url: 'https://boards-api.greenhouse.io/v1/boards/compasspathways/jobs'
-    },
-    {
-      name: 'Greenhouse - MindMed',
-      type: 'api',
-      url: 'https://boards-api.greenhouse.io/v1/boards/mindmed/jobs'
-    },
-    {
-      name: 'Greenhouse - Cybin',
-      type: 'api',
-      url: 'https://boards-api.greenhouse.io/v1/boards/cybin/jobs'
-    },
-    {
-      name: 'Greenhouse - Atai',
-      type: 'api',
-      url: 'https://boards-api.greenhouse.io/v1/boards/atai/jobs'
-    },
-    {
-      name: 'Lever - Numinus',
-      type: 'api',
-      url: 'https://api.lever.co/v0/postings/numinus'
-    }
+  // Boards that are always crawled, independent of discovery
+  private static readonly SEED_BOARDS: AtsBoard[] = [
+    { provider: 'greenhouse', slug: 'compasspathways', company: 'COMPASS Pathways', url: 'https://boards-api.greenhouse.io/v1/boards/compasspathways/jobs', jobCount: 0, discoveredAt: '' },
+    { provider: 'greenhouse', slug: 'mindmed', company: 'MindMed', url: 'https://boards-api.greenhouse.io/v1/boards/mindmed/jobs', jobCount: 0, discoveredAt: '' },
+    { provider: 'greenhouse', slug: 'cybin', company: 'Cybin', url: 'https://boards-api.greenhouse.io/v1/boards/cybin/jobs', jobCount: 0, discoveredAt: '' },
+    { provider: 'greenhouse', slug: 'atai', company: 'Atai Life Sciences', url: 'https://boards-api.greenhouse.io/v1/boards/atai/jobs', jobCount: 0, discoveredAt: '' },
+    { provider: 'lever', slug: 'numinus', company: 'Numinus Wellness', url: 'https://api.lever.co/v0/postings/numinus', jobCount: 0, discoveredAt: '' }
   ];
+
+  private options: JobCrawlerOptions;
 
   // Keywords for identifying psychedelic-related jobs
   private static readonly PSYCHEDELIC_KEYWORDS = [
@@ -71,7 +58,7 @@ export class JobCrawler extends BaseCrawler<JobPosting> {
     'pharmacology'
   ];
 
-  constructor() {
+  constructor(options: JobCrawlerOptions = {}) {
     super({
       name: 'JobCrawler',
       baseUrl: '',
@@ -80,26 +67,51 @@ export class JobCrawler extends BaseCrawler<JobPosting> {
       retries: 3,
       timeout: 30000
     });
+    this.options = options;
   }
 
   /**
-   * Main crawl method - fetches jobs from all configured sources
+   * Collect the boards to crawl: seed boards plus boards auto-discovered
+   * for the provided company names, deduplicated by provider+slug.
+   */
+  private async resolveBoards(): Promise<AtsBoard[]> {
+    const boards = new Map<string, AtsBoard>();
+
+    for (const board of JobCrawler.SEED_BOARDS) {
+      boards.set(`${board.provider}/${board.slug}`, board);
+    }
+
+    const companies = this.options.companies ?? [];
+    if (companies.length > 0) {
+      const discovery = new AtsDiscovery({ cacheDir: this.options.cacheDir });
+      const discovered = await discovery.discover(companies);
+      for (const board of discovered) {
+        boards.set(`${board.provider}/${board.slug}`, board);
+      }
+    }
+
+    return Array.from(boards.values());
+  }
+
+  /**
+   * Main crawl method - fetches jobs from all seed and discovered boards
    */
   async crawl(query?: string): Promise<CrawlResult<JobPosting>> {
     const jobs: JobPosting[] = [];
     const errors: string[] = [];
     const startTime = Date.now();
 
-    logger.info(`[JobCrawler] Starting job crawl from ${JobCrawler.JOB_SOURCES.length} sources`);
+    const boards = await this.resolveBoards();
+    logger.info(`[JobCrawler] Starting job crawl from ${boards.length} boards`);
 
-    for (const source of JobCrawler.JOB_SOURCES) {
+    for (const board of boards) {
       try {
-        logger.debug(`[JobCrawler] Crawling ${source.name}`);
-        const sourceJobs = await this.crawlSource(source);
+        logger.debug(`[JobCrawler] Crawling ${board.provider}/${board.slug}`);
+        const sourceJobs = await this.crawlBoard(board);
         jobs.push(...sourceJobs);
-        logger.info(`[JobCrawler] Found ${sourceJobs.length} jobs from ${source.name}`);
+        logger.info(`[JobCrawler] Found ${sourceJobs.length} jobs from ${board.provider}/${board.slug}`);
       } catch (error) {
-        const errorMsg = `Failed to crawl ${source.name}: ${error instanceof Error ? error.message : 'Unknown error'}`;
+        const errorMsg = `Failed to crawl ${board.provider}/${board.slug}: ${error instanceof Error ? error.message : 'Unknown error'}`;
         errors.push(errorMsg);
         logger.error(`[JobCrawler] ${errorMsg}`);
       }
@@ -122,26 +134,25 @@ export class JobCrawler extends BaseCrawler<JobPosting> {
   }
 
   /**
-   * Crawl a specific job source
+   * Crawl a single ATS board
    */
-  private async crawlSource(source: JobSource): Promise<JobPosting[]> {
-    switch (source.type) {
-      case 'api':
-        if (source.url.includes('greenhouse')) {
-          return this.crawlGreenhouse(source);
-        } else if (source.url.includes('lever')) {
-          return this.crawlLever(source);
-        }
-        return [];
-      default:
-        return [];
+  private async crawlBoard(board: AtsBoard): Promise<JobPosting[]> {
+    switch (board.provider) {
+      case 'greenhouse':
+        return this.crawlGreenhouse(board);
+      case 'lever':
+        return this.crawlLever(board);
+      case 'ashby':
+        return this.crawlAshby(board);
+      case 'workable':
+        return this.crawlWorkable(board);
     }
   }
 
   /**
    * Crawl Greenhouse job board API
    */
-  private async crawlGreenhouse(source: JobSource): Promise<JobPosting[]> {
+  private async crawlGreenhouse(board: AtsBoard): Promise<JobPosting[]> {
     interface GreenhouseJob {
       id: number;
       title: string;
@@ -158,16 +169,15 @@ export class JobCrawler extends BaseCrawler<JobPosting> {
       jobs: GreenhouseJob[];
     }
 
-    const response = await this.request<GreenhouseResponse>(source.url, {
+    const response = await this.request<GreenhouseResponse>(board.url, {
       params: { content: 'true' }
     });
 
-    const companyName = this.extractCompanyFromUrl(source.url);
     const jobs: JobPosting[] = [];
 
     for (const job of response.jobs || []) {
       try {
-        const transformed = this.transformGreenhouseJob(job, companyName, source);
+        const transformed = this.transformGreenhouseJob(job, board.company, board);
         const validated = this.validate(transformed);
         if (validated) {
           jobs.push(validated);
@@ -183,7 +193,7 @@ export class JobCrawler extends BaseCrawler<JobPosting> {
   /**
    * Crawl Lever job board API
    */
-  private async crawlLever(source: JobSource): Promise<JobPosting[]> {
+  private async crawlLever(board: AtsBoard): Promise<JobPosting[]> {
     interface LeverJob {
       id: string;
       text: string;
@@ -199,13 +209,12 @@ export class JobCrawler extends BaseCrawler<JobPosting> {
       descriptionPlain?: string;
     }
 
-    const response = await this.request<LeverJob[]>(source.url);
-    const companyName = this.extractCompanyFromUrl(source.url);
+    const response = await this.request<LeverJob[]>(board.url);
     const jobs: JobPosting[] = [];
 
     for (const job of response || []) {
       try {
-        const transformed = this.transformLeverJob(job, companyName, source);
+        const transformed = this.transformLeverJob(job, board.company, board);
         const validated = this.validate(transformed);
         if (validated) {
           jobs.push(validated);
@@ -219,12 +228,132 @@ export class JobCrawler extends BaseCrawler<JobPosting> {
   }
 
   /**
+   * Crawl Ashby posting API
+   */
+  private async crawlAshby(board: AtsBoard): Promise<JobPosting[]> {
+    interface AshbyJob {
+      id: string;
+      title: string;
+      location?: string;
+      department?: string;
+      team?: string;
+      employmentType?: string;
+      isRemote?: boolean;
+      publishedAt?: string;
+      jobUrl: string;
+      applyUrl?: string;
+      descriptionHtml?: string;
+    }
+
+    interface AshbyResponse {
+      jobs: AshbyJob[];
+    }
+
+    const response = await this.request<AshbyResponse>(board.url);
+    const jobs: JobPosting[] = [];
+
+    for (const job of response.jobs || []) {
+      try {
+        const location = { ...this.parseLocation(job.location || ''), ...(job.isRemote ? { remote: true } : {}) };
+
+        let description: string | undefined;
+        if (job.descriptionHtml) {
+          const $ = cheerio.load(job.descriptionHtml);
+          description = cleanText($.text());
+        }
+
+        const transformed: Partial<JobPosting> = {
+          id: this.generateId('job', `as-${job.id}`),
+          title: job.title,
+          company: board.company,
+          type: this.categorizeJobType(job.title, job.department || job.team || ''),
+          employmentType: this.parseEmploymentType(job.employmentType),
+          location,
+          description: description?.slice(0, 5000),
+          postedDate: parseDate(job.publishedAt),
+          applicationUrl: job.applyUrl || job.jobUrl,
+          source: `Ashby - ${board.company}`,
+          sourceUrl: job.jobUrl,
+          crawledAt: this.getTimestamp()
+        };
+
+        const validated = this.validate(transformed);
+        if (validated) {
+          jobs.push(validated);
+        }
+      } catch (error) {
+        logger.warn(`[JobCrawler] Failed to process job ${job.id}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      }
+    }
+
+    return jobs;
+  }
+
+  /**
+   * Crawl Workable widget API
+   */
+  private async crawlWorkable(board: AtsBoard): Promise<JobPosting[]> {
+    interface WorkableJob {
+      title: string;
+      shortcode: string;
+      employment_type?: string;
+      telecommuting?: boolean;
+      department?: string;
+      url: string;
+      application_url?: string;
+      published_on?: string;
+      country?: string;
+      city?: string;
+      state?: string;
+    }
+
+    interface WorkableResponse {
+      jobs: WorkableJob[];
+    }
+
+    const response = await this.request<WorkableResponse>(board.url);
+    const jobs: JobPosting[] = [];
+
+    for (const job of response.jobs || []) {
+      try {
+        const transformed: Partial<JobPosting> = {
+          id: this.generateId('job', `wk-${job.shortcode}`),
+          title: job.title,
+          company: board.company,
+          type: this.categorizeJobType(job.title, job.department || ''),
+          employmentType: this.parseEmploymentType(job.employment_type),
+          location: {
+            city: job.city,
+            state: job.state,
+            country: job.country,
+            remote: job.telecommuting === true
+          },
+          postedDate: parseDate(job.published_on),
+          applicationUrl: job.application_url || job.url,
+          source: `Workable - ${board.company}`,
+          sourceUrl: job.url,
+          crawledAt: this.getTimestamp()
+        };
+
+        const validated = this.validate(transformed);
+        if (validated) {
+          jobs.push(validated);
+        }
+      } catch (error) {
+        logger.warn(`[JobCrawler] Failed to process job ${job.shortcode}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      }
+    }
+
+    return jobs;
+  }
+
+  /**
    * Transform Greenhouse job to our schema
    */
   private transformGreenhouseJob(
     job: { id: number; title: string; location: { name: string }; departments: Array<{ name: string }>; updated_at: string; absolute_url: string; content?: string },
     companyName: string,
-    source: JobSource
+    board: AtsBoard
   ): Partial<JobPosting> {
     const location = this.parseLocation(job.location?.name || '');
     const department = job.departments?.[0]?.name || '';
@@ -246,7 +375,7 @@ export class JobCrawler extends BaseCrawler<JobPosting> {
       description: description?.slice(0, 5000), // Limit description length
       postedDate: parseDate(job.updated_at),
       applicationUrl: job.absolute_url,
-      source: source.name,
+      source: `Greenhouse - ${companyName}`,
       sourceUrl: job.absolute_url,
       crawledAt: this.getTimestamp()
     };
@@ -258,7 +387,7 @@ export class JobCrawler extends BaseCrawler<JobPosting> {
   private transformLeverJob(
     job: { id: string; text: string; categories: { commitment?: string; department?: string; location?: string; team?: string }; createdAt: number; hostedUrl: string; applyUrl: string; descriptionPlain?: string },
     companyName: string,
-    source: JobSource
+    board: AtsBoard
   ): Partial<JobPosting> {
     const location = this.parseLocation(job.categories?.location || '');
     const department = job.categories?.department || job.categories?.team || '';
@@ -275,7 +404,7 @@ export class JobCrawler extends BaseCrawler<JobPosting> {
       description: cleanText(job.descriptionPlain)?.slice(0, 5000),
       postedDate: job.createdAt ? new Date(job.createdAt).toISOString().split('T')[0] : undefined,
       applicationUrl: job.applyUrl || job.hostedUrl,
-      source: source.name,
+      source: `Lever - ${companyName}`,
       sourceUrl: job.hostedUrl,
       crawledAt: this.getTimestamp()
     };
@@ -298,36 +427,6 @@ export class JobCrawler extends BaseCrawler<JobPosting> {
       logger.warn(`[JobCrawler] Validation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
       return null;
     }
-  }
-
-  /**
-   * Extract company name from job board URL
-   */
-  private extractCompanyFromUrl(url: string): string {
-    const companyMap: Record<string, string> = {
-      'compasspathways': 'COMPASS Pathways',
-      'mindmed': 'MindMed',
-      'cybin': 'Cybin',
-      'atai': 'Atai Life Sciences',
-      'numinus': 'Numinus Wellness',
-      'fieldtriphealth': 'Field Trip Health',
-      'awakn': 'Awakn Life Sciences'
-    };
-
-    for (const [key, value] of Object.entries(companyMap)) {
-      if (url.toLowerCase().includes(key)) {
-        return value;
-      }
-    }
-
-    // Extract from URL path
-    const match = url.match(/boards\/(\w+)\/jobs|postings\/(\w+)/);
-    if (match) {
-      const name = match[1] || match[2];
-      return name.charAt(0).toUpperCase() + name.slice(1);
-    }
-
-    return 'Unknown';
   }
 
   /**
@@ -428,10 +527,10 @@ export class JobCrawler extends BaseCrawler<JobPosting> {
   }
 
   /**
-   * Get list of job sources
+   * Get list of seed boards
    */
-  static getJobSources(): JobSource[] {
-    return JobCrawler.JOB_SOURCES;
+  static getSeedBoards(): AtsBoard[] {
+    return JobCrawler.SEED_BOARDS;
   }
 
   /**

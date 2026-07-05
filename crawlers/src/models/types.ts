@@ -355,6 +355,28 @@ export type CrawledData =
   | Event
   | EducationalResource;
 
+// Change Event Schema — emitted by the diff engine whenever a crawl
+// adds, updates, or removes an entity. Powers alerts and the newsletter.
+export const CHANGE_TYPES = ['added', 'updated', 'removed'] as const;
+export type ChangeType = typeof CHANGE_TYPES[number];
+
+export const ChangeEventSchema = z.object({
+  id: z.string(),
+  entityType: z.string(),
+  entityId: z.string(),
+  entityTitle: z.string(),
+  changeType: z.enum(CHANGE_TYPES),
+  fields: z.array(z.object({
+    field: z.string(),
+    from: z.string().optional(),
+    to: z.string().optional()
+  })).optional(),
+  summary: z.string(),
+  detectedAt: z.string()
+});
+
+export type ChangeEvent = z.infer<typeof ChangeEventSchema>;
+
 // ============================================
 // SEARCH TERMS FOR CRAWLERS
 // ============================================

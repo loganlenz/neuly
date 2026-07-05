@@ -5,7 +5,8 @@ import cors from 'cors';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { existsSync } from 'fs';
-import { DataStorage, DataType } from './utils/storage.js';
+import { DataType } from './utils/storage.js';
+import { createStorage } from './utils/storageBackend.js';
 import { logger } from './utils/logger.js';
 import {
   ClinicalTrial,
@@ -23,7 +24,7 @@ const __dirname = dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 3001;
-const storage = new DataStorage();
+const storage = await createStorage();
 
 // Middleware
 app.use(cors());
@@ -612,6 +613,24 @@ app.get('/api/search', async (req: Request, res: Response) => {
   }
 });
 
+/**
+ * Recent change events (diff engine output): what's new, updated, removed.
+ * Query params: type (entity type), since (ISO timestamp), limit
+ */
+app.get('/api/changes', async (req: Request, res: Response) => {
+  try {
+    const events = await storage.loadChangeEvents({
+      entityType: req.query.type as string | undefined,
+      since: req.query.since as string | undefined,
+      limit: parseInt(req.query.limit as string) || 100
+    });
+    res.json({ data: events, total: events.length });
+  } catch (error) {
+    logger.error(`Error fetching change events: ${error}`);
+    res.status(500).json({ error: 'Failed to fetch change events' });
+  }
+});
+
 // ============================================
 // ERROR HANDLING
 // ============================================
@@ -655,6 +674,8 @@ app.listen(PORT, () => {
   logger.info('  GET /api/jobs            - Job postings');
   logger.info('  GET /api/events          - Events');
   logger.info('  GET /api/search?q=       - Global search');
+  logger.info('  GET /api/changes         - Recent change events');
+  logger.info(`Storage backend: ${storage.label}`);
   logger.info('='.repeat(50));
 });
 
