@@ -10,6 +10,9 @@
   <meta name="apple-mobile-web-app-title" content="Neuly">
   <meta name="format-detection" content="telephone=no">
   <title>Neuly - Natural Medicine Research Platform</title>
+  <!-- If the frontend is hosted separately from the API (e.g. static hosting),
+       set content to the API server's origin, e.g. https://neuly-web.onrender.com -->
+  <meta name="neuly-api-base" content="">
   <!-- Vendored locally (see /vendor) so the app has no third-party CDN dependency -->
   <script src="vendor/react.production.min.js"></script>
   <script src="vendor/react-dom.production.min.js"></script>
@@ -138,9 +141,17 @@
       return isMobile;
     };
 
-    // API Configuration — same-origin in production (the Express server serves
-    // this file and /api together); localhost only when opened as a local file.
-    const API_BASE_URL = window.location.protocol === 'file:' ? 'http://localhost:3001/api' : '/api';
+    // API Configuration. Resolution order:
+    //   1. <meta name="neuly-api-base"> — for a static-hosted frontend pointing
+    //      at a separately deployed API server (CORS is open on the server)
+    //   2. same-origin /api — production default; the Express server serves
+    //      this file and the API together
+    //   3. localhost:3001 — when opened directly as a local file
+    const apiBaseMeta = document.querySelector('meta[name="neuly-api-base"]');
+    const API_BASE_URL = (apiBaseMeta && apiBaseMeta.content)
+      ? apiBaseMeta.content.replace(/\/+$/, '') + '/api'
+      : window.location.protocol === 'file:' ? 'http://localhost:3001/api' : '/api';
+    console.log('Neuly API base:', API_BASE_URL);
 
     // API Helper Functions
     const api = {
@@ -208,7 +219,8 @@
         stats: null,
         loading: true,
         error: null,
-        usingApi: false
+        usingApi: false,
+        attempts: 0
       });
 
       useEffect(() => {
@@ -240,13 +252,14 @@
               stats: dashboard,
               loading: false,
               error: null,
-              usingApi: true
+              usingApi: true,
+              attempts: 0
             });
             console.log('✅ Connected to Neuly API - using live data');
             return true;
           } catch (error) {
             if (!cancelled) {
-              setApiData(prev => ({ ...prev, loading: false, error: error.message, usingApi: false }));
+              setApiData(prev => ({ ...prev, loading: false, error: error.message, usingApi: false, attempts: prev.attempts + 1 }));
             }
             return false;
           }
@@ -687,7 +700,7 @@
 
     // Hero Section
     const HeroSection = ({ setCurrentPage, setUser }) => (
-      <section style={{ position: 'relative', zIndex: 1, minHeight: '100vh', display: 'flex', alignItems: 'center', padding: '120px 40px 80px', maxWidth: '1400px', margin: '0 auto' }}>
+      <section style={{ position: 'relative', zIndex: 1, minHeight: '100vh', display: 'flex', alignItems: 'center', padding: '120px 40px 80px', maxWidth: '1280px', margin: '0 auto' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '80px', width: '100%' }}>
           <div style={{ flex: 1, maxWidth: '600px' }}>
             <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', fontSize: '13px', fontWeight: 500, color: '#7dd3c0', marginBottom: '24px', padding: '8px 16px', background: 'rgba(125, 211, 192, 0.1)', borderRadius: '20px', border: '1px solid rgba(125, 211, 192, 0.2)' }}>
@@ -923,7 +936,7 @@
 
       return (
         <div style={{ position: 'relative', zIndex: 1, paddingTop: '100px', minHeight: '100vh' }}>
-          <div style={{ padding: '40px', maxWidth: '1400px', margin: '0 auto' }}>
+          <div style={{ padding: '40px', maxWidth: '1280px', margin: '0 auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '40px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
                 <div style={{ width: '80px', height: '80px', borderRadius: '50%', background: 'linear-gradient(135deg, #7dd3c0 0%, #a8c5e2 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '32px', fontWeight: 600, color: '#0a0f0d', boxShadow: '0 8px 32px rgba(125,211,192,0.3)' }}>{user.name.charAt(0)}</div>
@@ -2710,15 +2723,18 @@
       const isMobile = useIsMobile();
       if (!apiData) return null;
 
-      const { usingApi, loading } = apiData;
+      const { usingApi, loading, attempts } = apiData;
 
       // On mobile/tablet the pill would collide with the bottom tab bar
       if (isMobile) return null;
 
-      // Connected → teal "Live Data"; connecting/retrying → amber. The provider
-      // keeps retrying in the background, so this resolves itself when the API answers.
-      const color = usingApi ? '#7dd3c0' : '#f0b775';
-      const label = usingApi ? 'Live Data' : loading ? 'Connecting…' : 'Reconnecting…';
+      // Connected → teal "Live Data". While retrying → amber "Connecting…".
+      // After several failures the API clearly isn't there (e.g. the frontend is
+      // being served without its backend) → red "API offline" instead of
+      // pretending a reconnect is imminent. Retries continue in the background.
+      const offline = !usingApi && attempts >= 4;
+      const color = usingApi ? '#7dd3c0' : offline ? '#e57373' : '#f0b775';
+      const label = usingApi ? 'Live Data' : offline ? 'API offline' : 'Connecting…';
 
       return (
         <div style={{
