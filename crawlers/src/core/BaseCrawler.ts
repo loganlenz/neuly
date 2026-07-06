@@ -195,9 +195,18 @@ export abstract class BaseCrawler<T extends CrawledData> {
 
     const duration = Date.now() - startTime;
 
+    // The same entity routinely matches several search queries (a psilocybin
+    // depression trial matches both 'psilocybin depression' and 'psychedelic
+    // therapy'). Keep one row per id — duplicate ids in a single Postgres
+    // INSERT ... ON CONFLICT statement are a hard error.
+    const uniqueData = Array.from(new Map(allData.map(item => [item.id, item])).values());
+    if (uniqueData.length < allData.length) {
+      logger.info(`[${this.config.name}] Deduplicated ${allData.length} -> ${uniqueData.length} items across queries`);
+    }
+
     const stats = {
-      total: allData.length + errors.length,
-      successful: allData.length,
+      total: uniqueData.length + errors.length,
+      successful: uniqueData.length,
       failed: errors.length,
       duration
     };
@@ -206,7 +215,7 @@ export abstract class BaseCrawler<T extends CrawledData> {
 
     return {
       success: errors.length === 0,
-      data: allData,
+      data: uniqueData,
       errors: errors.length > 0 ? errors : undefined,
       stats
     };
