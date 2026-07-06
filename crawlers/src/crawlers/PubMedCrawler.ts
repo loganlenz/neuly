@@ -145,7 +145,7 @@ export class PubMedCrawler extends BaseCrawler<ResearchPaper> {
       const searchParams: Record<string, string> = {
         db: 'pubmed',
         term: searchQuery,
-        retmax: '200',
+        retmax: '1000',
         retmode: 'json',
         sort: 'relevance',
         usehistory: 'y'

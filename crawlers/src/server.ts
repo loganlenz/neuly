@@ -514,6 +514,49 @@ app.get('/api/events/:id', async (req: Request, res: Response) => {
 });
 
 // ============================================
+// EDUCATION
+// ============================================
+
+app.get('/api/education', async (req: Request, res: Response) => {
+  try {
+    const courses = await storage.load<Record<string, string>>('educational_resources');
+    let filtered = courses;
+
+    if (req.query.level) {
+      const level = (req.query.level as string).toLowerCase();
+      filtered = filtered.filter(c => c.level?.toLowerCase() === level);
+    }
+    if (req.query.category) {
+      const category = (req.query.category as string).toLowerCase();
+      filtered = filtered.filter(c => c.category?.toLowerCase() === category);
+    }
+    if (req.query.search) {
+      const search = (req.query.search as string).toLowerCase();
+      filtered = filtered.filter(c =>
+        c.title?.toLowerCase().includes(search) ||
+        c.provider?.toLowerCase().includes(search) ||
+        c.description?.toLowerCase().includes(search)
+      );
+    }
+
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = parseInt(req.query.limit as string) || 50;
+    const start = (page - 1) * limit;
+
+    res.json({
+      data: filtered.slice(start, start + limit),
+      total: filtered.length,
+      page,
+      limit,
+      totalPages: Math.ceil(filtered.length / limit)
+    });
+  } catch (error) {
+    logger.error(`Error fetching educational resources: ${error}`);
+    res.status(500).json({ error: 'Failed to fetch educational resources' });
+  }
+});
+
+// ============================================
 // AGGREGATE ENDPOINTS
 // ============================================
 
@@ -522,13 +565,14 @@ app.get('/api/events/:id', async (req: Request, res: Response) => {
  */
 app.get('/api/dashboard', async (_req: Request, res: Response) => {
   try {
-    const [trials, papers, companies, people, jobs, events] = await Promise.all([
+    const [trials, papers, companies, people, jobs, events, education] = await Promise.all([
       storage.load<ClinicalTrial>('clinical_trials'),
       storage.load<ResearchPaper>('research_papers'),
       storage.load<Company>('companies'),
       storage.load<Person>('people'),
       storage.load<JobPosting>('jobs'),
-      storage.load<Event>('events')
+      storage.load<Event>('events'),
+      storage.load('educational_resources')
     ]);
 
     // Get upcoming events
@@ -559,7 +603,8 @@ app.get('/api/dashboard', async (_req: Request, res: Response) => {
         companies: companies.length,
         people: people.length,
         jobs: jobs.length,
-        events: events.length
+        events: events.length,
+        educationalResources: education.length
       },
       upcomingEvents,
       recentJobs,
