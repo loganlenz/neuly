@@ -61,6 +61,13 @@ export abstract class BaseCrawler<T extends CrawledData> {
         return response;
       },
       error => {
+        // APIs explain rejected requests in the response body; axios's default
+        // message only carries the status code. Surface the body so recorded
+        // failures say WHICH parameter was rejected, not just "400".
+        const body = error.response?.data
+          ? ` — ${JSON.stringify(error.response.data).slice(0, 300)}`
+          : '';
+        error.message = `${error.message}${body}`;
         logger.error(`[${this.config.name}] Request failed: ${error.message}`);
         throw error;
       }
@@ -80,11 +87,26 @@ export abstract class BaseCrawler<T extends CrawledData> {
 
       return pRetry(
         async () => {
-          const response = await this.client.request<R>({
-            url,
-            ...options
-          });
-          return response.data;
+          try {
+            const response = await this.client.request<R>({
+              url,
+              ...options
+            });
+            return response.data;
+          } catch (error) {
+            // Rate limited: retrying on the default ~2s backoff just burns the
+            // remaining attempts while the limit is still active. Wait out the
+            // window (Retry-After header when given, 30s otherwise) first.
+            if (axios.isAxiosError(error) && error.response?.status === 429) {
+              const retryAfter = parseInt(String(error.response.headers['retry-after'] ?? ''), 10);
+              const waitMs = Number.isFinite(retryAfter) && retryAfter > 0
+                ? Math.min(retryAfter, 120) * 1000
+                : 30000;
+              logger.warn(`[${this.config.name}] Rate limited (429) on ${url}; waiting ${Math.round(waitMs / 1000)}s before retry`);
+              await this.delay(waitMs);
+            }
+            throw error;
+          }
         },
         {
           retries: this.config.retries,

@@ -105,8 +105,12 @@ CREATE TABLE IF NOT EXISTS crawl_runs (
   data_type   TEXT NOT NULL,
   item_count  INTEGER NOT NULL,
   duration_ms INTEGER NOT NULL DEFAULT 0,
+  error       TEXT,
   ran_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Idempotent upgrade for databases created before the error column existed
+ALTER TABLE crawl_runs ADD COLUMN IF NOT EXISTS error TEXT;
 
 -- ============================================
 -- Application tables (auth, billing, alerts, newsletter)

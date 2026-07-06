@@ -104,8 +104,16 @@ export class JobCrawler extends BaseCrawler<JobPosting> {
     const boards = await this.resolveBoards();
     logger.info(`[JobCrawler] Starting job crawl from ${boards.length} boards`);
 
+    let previousProvider: string | null = null;
     for (const board of boards) {
       try {
+        // Space out consecutive hits to the same ATS provider — Workable in
+        // particular rate-limits bursts across accounts from one IP.
+        if (previousProvider === board.provider) {
+          await this.delay(board.provider === 'workable' ? 5000 : 1500);
+        }
+        previousProvider = board.provider;
+
         logger.debug(`[JobCrawler] Crawling ${board.provider}/${board.slug}`);
         const sourceJobs = await this.crawlBoard(board);
         jobs.push(...sourceJobs);

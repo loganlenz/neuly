@@ -179,6 +179,13 @@ export class CrawlerOrchestrator {
     const data = result.data ?? [];
 
     if (data.length === 0) {
+      // A failed crawl that swallowed its errors would otherwise vanish
+      // without a trace — record it so /api/stats shows what broke.
+      if (!result.success) {
+        const errorMsg = (result.errors ?? ['crawl returned no data']).slice(0, 3).join(' | ');
+        await this.storage.recordFailure(spec.type, errorMsg).catch(() => undefined);
+        return { type: spec.type, count: 0, changes: 0, error: errorMsg };
+      }
       return { type: spec.type, count: 0, changes: 0 };
     }
 
@@ -241,6 +248,8 @@ export class CrawlerOrchestrator {
         const errorMsg = error instanceof Error ? error.message : 'Unknown error';
         results.push({ type: this.crawlers.get(name)!.type, count: 0, changes: 0, error: errorMsg });
         logger.error(`Failed: ${name} - ${errorMsg}`);
+        await this.storage.recordFailure(this.crawlers.get(name)!.type, errorMsg)
+          .catch(e => logger.warn(`Could not record failure: ${e instanceof Error ? e.message : e}`));
       }
     }
 

@@ -43,6 +43,7 @@ export interface DataManifest {
     timestamp: string;
     count: number;
     duration: number;
+    error?: string;
   }>;
 }
 
@@ -193,9 +194,16 @@ export class DataStorage implements StorageBackend {
   }
 
   /**
+   * Record a failed crawl run so /api/stats shows what broke and why.
+   */
+  async recordFailure(type: DataType, error: string): Promise<void> {
+    await this.updateManifest(type, -1, error);
+  }
+
+  /**
    * Update the data manifest
    */
-  private async updateManifest(type: DataType, count: number): Promise<void> {
+  private async updateManifest(type: DataType, count: number, error?: string): Promise<void> {
     const manifestPath = join(this.baseDir, 'manifest.json');
     let manifest: DataManifest;
 
@@ -210,12 +218,15 @@ export class DataStorage implements StorageBackend {
     }
 
     manifest.lastUpdated = new Date().toISOString();
-    manifest.counts[type] = count;
+    if (count >= 0) {
+      manifest.counts[type] = count;
+    }
     manifest.crawlHistory.push({
       type,
       timestamp: new Date().toISOString(),
-      count,
-      duration: 0
+      count: Math.max(0, count),
+      duration: 0,
+      ...(error ? { error } : {})
     });
 
     // Keep only last 100 history entries
