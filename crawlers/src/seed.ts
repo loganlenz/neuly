@@ -767,43 +767,58 @@ const events = [
 ];
 
 // ============================================
+// EDUCATIONAL RESOURCES (curated)
+// Real training programs; refreshed by hand — providers change rarely.
+// ============================================
+const educationalResources = [
+  { id: 'edu_fluence-foundations', provider: 'Fluence', title: 'Psychedelic-Assisted Therapy Foundations', price: '$399', level: 'Beginner', category: 'Therapy', duration: '8 weeks', description: 'Comprehensive introduction to psychedelic-assisted therapy covering psilocybin, MDMA, and ketamine protocols.', url: 'https://www.fluencetraining.com', crawledAt: new Date().toISOString() },
+  { id: 'edu_fluence-integration', provider: 'Fluence', title: 'Integration Techniques for Clinicians', price: '$249', level: 'Intermediate', category: 'Therapy', duration: '6 weeks', description: 'Advanced integration methods including somatic, narrative, and mindfulness-based approaches for post-session care.', url: 'https://www.fluencetraining.com', crawledAt: new Date().toISOString() },
+  { id: 'edu_maps-mdma', provider: 'MAPS', title: 'MDMA-Assisted Therapy for PTSD', price: '$599', level: 'Advanced', category: 'Therapy', duration: '12 weeks', description: 'Deep dive into the MAPS MDMA therapy protocol, clinical trial methodology, and therapist competencies.', url: 'https://maps.org/education', crawledAt: new Date().toISOString() },
+  { id: 'edu_naropa', provider: 'Naropa University', title: 'Psychedelic-Assisted Therapies Certificate', price: '$1,200', level: 'Advanced', category: 'Academic', duration: '16 weeks', description: 'Graduate-level certificate exploring contemplative traditions and psychedelic science for clinical practice.', url: 'https://www.naropa.edu', crawledAt: new Date().toISOString() },
+  { id: 'edu_psychedelic-support-kap', provider: 'Psychedelic.Support', title: 'Ketamine-Assisted Psychotherapy', price: '$349', level: 'Intermediate', category: 'Therapy', duration: '6 weeks', description: 'Clinical training in ketamine-assisted psychotherapy including dosing, monitoring, and therapeutic frameworks.', url: 'https://psychedelic.support', crawledAt: new Date().toISOString() },
+  { id: 'edu_ciis', provider: 'CIIS', title: 'Certificate in Psychedelic-Assisted Therapies and Research', price: '$899', level: 'Advanced', category: 'Academic', duration: '10 weeks', description: 'Research methodology and clinical training from the California Institute of Integral Studies certificate program.', url: 'https://www.ciis.edu/research-centers/center-for-psychedelic-therapies-and-research', crawledAt: new Date().toISOString() },
+  { id: 'edu_ipi', provider: 'Integrative Psychiatry Institute', title: 'Psychedelic-Assisted Therapy Certification', price: '$5,000+', level: 'Advanced', category: 'Therapy', duration: '12 months', description: 'Yearlong certification for licensed clinicians covering ketamine, psilocybin, and MDMA-assisted therapy with experiential practicum.', url: 'https://psychiatryinstitute.com', crawledAt: new Date().toISOString() },
+  { id: 'edu_synthesis', provider: 'Synthesis Institute', title: 'Psilocybin Facilitation Practicum', price: '$2,500', level: 'Advanced', category: 'Therapy', duration: '8 weeks', description: 'Hands-on practicum for psilocybin session facilitation including preparation, guiding, and integration.', url: 'https://www.synthesisinstitute.com', crawledAt: new Date().toISOString() },
+  { id: 'edu_therapsil', provider: 'TheraPsil', title: 'Psilocybin for End-of-Life Care', price: '$449', level: 'Intermediate', category: 'Therapy', duration: '6 weeks', description: 'Specialized training in psilocybin-assisted therapy for existential distress in palliative care settings.', url: 'https://therapsil.ca', crawledAt: new Date().toISOString() },
+  { id: 'edu_zendo', provider: 'Zendo Project', title: 'Psychedelic Peer Support Training', price: '$199', level: 'Beginner', category: 'Safety', duration: '3 weeks', description: 'Training for peer support workers in festival, community, and clinical psychedelic settings.', url: 'https://zendoproject.org', crawledAt: new Date().toISOString() },
+  { id: 'edu_dancesafe', provider: 'DanceSafe', title: 'Harm Reduction Fundamentals', price: 'Free', level: 'Beginner', category: 'Safety', duration: '4 weeks', description: 'Evidence-based harm reduction strategies for psychedelic use in community and clinical contexts.', url: 'https://dancesafe.org', crawledAt: new Date().toISOString() },
+  { id: 'edu_hopkins-course', provider: 'Johns Hopkins', title: 'Science of Psychedelics', price: 'Free', level: 'Beginner', category: 'Academic', duration: '5 weeks', description: 'Introduction to the modern science of psychedelics from the Center for Psychedelic and Consciousness Research.', url: 'https://hopkinspsychedelic.org', crawledAt: new Date().toISOString() }
+];
+
+// ============================================
 // SEED DATA
 // ============================================
 async function seed() {
-  // --if-empty: deploy-time guard — never overwrite data a crawler has written
-  if (process.argv.includes('--if-empty')) {
-    const existing = await storage.load('companies');
-    if (existing.length > 0) {
-      logger.info(`Seed skipped: storage already has ${existing.length} companies (--if-empty)`);
-      await storage.close();
-      return;
+  // --if-empty: deploy-time guard, checked PER DATASET — a dataset that
+  // already has rows (seeded earlier or written by a crawler) is never
+  // overwritten, while newly added datasets still get their seed.
+  const ifEmpty = process.argv.includes('--if-empty');
+
+  logger.info('='.repeat(50));
+  logger.info(`Seeding Neuly database${ifEmpty ? ' (--if-empty: only empty datasets)' : ''}`);
+  logger.info('='.repeat(50));
+
+  const datasets: Array<[string, unknown[]]> = [
+    ['companies', companies],
+    ['people', people],
+    ['clinical_trials', clinicalTrials],
+    ['research_papers', researchPapers],
+    ['jobs', jobs],
+    ['events', events],
+    ['educational_resources', educationalResources]
+  ];
+
+  for (const [type, rows] of datasets) {
+    if (ifEmpty) {
+      const existing = await storage.load(type as any);
+      if (existing.length > 0) {
+        logger.info(`Skipped ${type}: already has ${existing.length} rows`);
+        continue;
+      }
     }
+    await storage.save(type as any, rows as any);
+    logger.info(`Saved ${rows.length} ${type}`);
   }
-
-  logger.info('='.repeat(50));
-  logger.info('Seeding Neuly database with initial data');
-  logger.info('='.repeat(50));
-
-  await storage.save('companies', companies as any);
-  logger.info(`Saved ${companies.length} companies`);
-
-  await storage.save('people', people as any);
-  logger.info(`Saved ${people.length} people`);
-
-  await storage.save('clinical_trials', clinicalTrials as any);
-  logger.info(`Saved ${clinicalTrials.length} clinical trials`);
-
-  await storage.save('research_papers', researchPapers as any);
-  logger.info(`Saved ${researchPapers.length} research papers`);
-
-  await storage.save('jobs', jobs as any);
-  logger.info(`Saved ${jobs.length} jobs`);
-
-  await storage.save('events', events as any);
-  logger.info(`Saved ${events.length} events`);
-
-  // Empty but ready
-  await storage.save('educational_resources', []);
 
   logger.info('');
   logger.info('='.repeat(50));

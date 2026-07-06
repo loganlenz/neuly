@@ -375,15 +375,27 @@ export class ClinicalTrialsCrawler extends BaseCrawler<ClinicalTrial> {
     return [
       'psilocybin depression',
       'psilocybin anxiety',
+      'psilocybin OCD',
+      'psilocybin anorexia',
+      'psilocybin addiction',
       'MDMA PTSD',
       'MDMA therapy',
+      'MDMA anxiety',
       'ketamine depression',
       'ketamine treatment-resistant',
+      'ketamine PTSD',
+      'esketamine depression',
       'LSD anxiety',
+      'LSD depression',
       'ibogaine addiction',
       'ayahuasca therapy',
+      'ayahuasca depression',
+      'mescaline therapy',
+      '5-MeO-DMT',
+      'salvinorin',
       'psychedelic therapy',
       'psychedelic-assisted psychotherapy',
+      'psychedelic microdosing',
       'DMT therapy'
     ];
   }

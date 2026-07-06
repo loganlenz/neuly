@@ -142,13 +142,15 @@
     };
 
     // API Configuration. Resolution order:
-    //   1. <meta name="neuly-api-base"> — for a static-hosted frontend pointing
-    //      at a separately deployed API server (CORS is open on the server)
+    //   1. <meta name="neuly-api-base"> — for a static-hosted frontend (e.g.
+    //      Netlify) pointing at a separately deployed API server. Ignored on
+    //      localhost so local development always talks to its own server.
     //   2. same-origin /api — production default; the Express server serves
     //      this file and the API together
     //   3. localhost:3001 — when opened directly as a local file
     const apiBaseMeta = document.querySelector('meta[name="neuly-api-base"]');
-    const API_BASE_URL = (apiBaseMeta && apiBaseMeta.content)
+    const isLocalhost = ['localhost', '127.0.0.1'].includes(window.location.hostname);
+    const API_BASE_URL = (apiBaseMeta && apiBaseMeta.content && !isLocalhost)
       ? apiBaseMeta.content.replace(/\/+$/, '') + '/api'
       : window.location.protocol === 'file:' ? 'http://localhost:3001/api' : '/api';
     console.log('Neuly API base:', API_BASE_URL);
@@ -200,6 +202,11 @@
         return this.get(`/events${query ? '?' + query : ''}`);
       },
 
+      async getEducation(params = {}) {
+        const query = new URLSearchParams(params).toString();
+        return this.get(`/education${query ? '?' + query : ''}`);
+      },
+
       async search(query) {
         return this.get(`/search?q=${encodeURIComponent(query)}`);
       }
@@ -216,6 +223,7 @@
         researchPapers: [],
         jobs: [],
         events: [],
+        education: [],
         stats: null,
         loading: true,
         error: null,
@@ -232,13 +240,14 @@
             const dashboard = await api.getDashboard();
             if (!dashboard || !dashboard.counts) throw new Error('API unreachable');
 
-            const [companiesRes, peopleRes, trialsRes, papersRes, jobsRes, eventsRes] = await Promise.all([
-              api.getCompanies({ limit: 500 }),
-              api.getPeople({ limit: 500 }),
-              api.getClinicalTrials({ limit: 500 }),
-              api.getResearchPapers({ limit: 500 }),
-              api.getJobs({ limit: 500 }),
-              api.getEvents({ limit: 500 })
+            const [companiesRes, peopleRes, trialsRes, papersRes, jobsRes, eventsRes, educationRes] = await Promise.all([
+              api.getCompanies({ limit: 1000 }),
+              api.getPeople({ limit: 2000 }),
+              api.getClinicalTrials({ limit: 3000 }),
+              api.getResearchPapers({ limit: 2000 }),
+              api.getJobs({ limit: 1000 }),
+              api.getEvents({ limit: 500 }),
+              api.getEducation({ limit: 500 })
             ]);
             if (cancelled) return true;
 
@@ -249,6 +258,7 @@
               researchPapers: papersRes?.data || [],
               jobs: jobsRes?.data || [],
               events: eventsRes?.data || [],
+              education: educationRes?.data || [],
               stats: dashboard,
               loading: false,
               error: null,
@@ -2264,20 +2274,8 @@
     const EducationPage = ({ user }) => {
       const [selectedLevel, setSelectedLevel] = useState('All');
       const [selectedCategory, setSelectedCategory] = useState('All');
-      const courses = [
-        { id: 1, provider: 'Fluence', title: 'Psychedelic-Assisted Therapy Foundations', price: '$399', level: 'Beginner', category: 'Therapy', duration: '8 weeks', students: 2340, rating: 4.8, description: 'Comprehensive introduction to psychedelic-assisted therapy covering psilocybin, MDMA, and ketamine protocols.' },
-        { id: 2, provider: 'Fluence', title: 'Integration Techniques for Clinicians', price: '$249', level: 'Intermediate', category: 'Therapy', duration: '6 weeks', students: 1580, rating: 4.9, description: 'Advanced integration methods including somatic, narrative, and mindfulness-based approaches for post-session care.' },
-        { id: 3, provider: 'Skylight', title: 'Harm Reduction Fundamentals', price: '$149', level: 'Beginner', category: 'Safety', duration: '4 weeks', students: 3120, rating: 4.7, description: 'Evidence-based harm reduction strategies for psychedelic use, community settings, and clinical contexts.' },
-        { id: 4, provider: 'MAPS', title: 'MDMA-Assisted Therapy for PTSD', price: '$599', level: 'Advanced', category: 'Therapy', duration: '12 weeks', students: 890, rating: 4.9, description: 'Deep dive into the MAPS MDMA therapy protocol, clinical trial methodology, and therapist competencies.' },
-        { id: 5, provider: 'Naropa University', title: 'Contemplative Psychedelic Studies', price: '$1,200', level: 'Advanced', category: 'Academic', duration: '16 weeks', students: 420, rating: 4.6, description: 'Graduate-level course exploring intersections of contemplative traditions and psychedelic science.' },
-        { id: 6, provider: 'Psychedelic.Support', title: 'Ketamine-Assisted Psychotherapy', price: '$349', level: 'Intermediate', category: 'Therapy', duration: '6 weeks', students: 1950, rating: 4.8, description: 'Clinical training in ketamine-assisted psychotherapy including dosing, monitoring, and therapeutic frameworks.' },
-        { id: 7, provider: 'CIIS', title: 'Psychedelic Research Methods', price: '$899', level: 'Advanced', category: 'Academic', duration: '10 weeks', students: 340, rating: 4.7, description: 'Research methodology for psychedelic clinical trials including study design, outcome measures, and regulatory frameworks.' },
-        { id: 8, provider: 'Innerlogue', title: 'Psychedelic Peer Support Training', price: '$199', level: 'Beginner', category: 'Safety', duration: '3 weeks', students: 4500, rating: 4.5, description: 'Training for peer support workers in festival, community, and clinical psychedelic settings.' },
-        { id: 9, provider: 'Synthesis Institute', title: 'Psilocybin Facilitation Practicum', price: '$2,500', level: 'Advanced', category: 'Therapy', duration: '8 weeks', students: 280, rating: 4.9, description: 'Hands-on practicum for psilocybin session facilitation including preparation, guiding, and integration.' },
-        { id: 10, provider: 'Entheo Society', title: 'History of Psychedelics', price: 'Free', level: 'Beginner', category: 'Academic', duration: '5 weeks', students: 8200, rating: 4.4, description: 'From ancient rituals to modern science — explore the cultural and scientific history of psychedelic substances.' },
-        { id: 11, provider: 'TheraPsil', title: 'Psilocybin for End-of-Life Care', price: '$449', level: 'Intermediate', category: 'Therapy', duration: '6 weeks', students: 720, rating: 4.8, description: 'Specialized training in psilocybin-assisted therapy for existential distress in palliative care settings.' },
-        { id: 12, provider: 'Skylight', title: 'Microdosing Science & Protocols', price: '$179', level: 'Beginner', category: 'Safety', duration: '4 weeks', students: 5600, rating: 4.3, description: 'Evidence-based review of microdosing research, protocols, and self-assessment tools.' }
-      ];
+      const apiData = useApiData();
+      const courses = (apiData?.education || []).map(c => ({ ...c, url: c.url || '#' }));
       const levels = ['All', 'Beginner', 'Intermediate', 'Advanced'];
       const categories = ['All', 'Therapy', 'Academic', 'Safety'];
       const filtered = courses.filter(c => (selectedLevel === 'All' || c.level === selectedLevel) && (selectedCategory === 'All' || c.category === selectedCategory));
@@ -2287,7 +2285,7 @@
           <div style={{ padding: '40px', maxWidth: '1280px', margin: '0 auto' }}>
             <div style={{ textAlign: 'center', marginBottom: '48px' }}><div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}><NeulyLogo height={32} suffix="edu" /></div><h1 style={{ fontFamily: '"Fraunces", serif', fontSize: '42px', fontWeight: 600, color: '#fff', marginBottom: '12px' }}>Education</h1><p style={{ fontSize: '16px', color: '#6b7370', maxWidth: '600px', margin: '0 auto' }}>Professional training and courses in psychedelic-assisted therapy, research, and harm reduction</p></div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', marginBottom: '32px' }}>
-              {[{ label: 'Total Courses', value: courses.length, icon: '📚' }, { label: 'Total Students', value: courses.reduce((s, c) => s + c.students, 0).toLocaleString(), icon: '🎓' }, { label: 'Avg Rating', value: (courses.reduce((s, c) => s + c.rating, 0) / courses.length).toFixed(1), icon: '⭐' }, { label: 'Providers', value: new Set(courses.map(c => c.provider)).size, icon: '🏫' }].map((stat, i) => (<div key={i} style={{ ...sharedStyles.card, textAlign: 'center', padding: '20px' }}><span style={{ fontSize: '24px' }}>{stat.icon}</span><div style={{ fontSize: '28px', fontWeight: 700, color: '#fff', margin: '8px 0 4px' }}>{stat.value}</div><div style={{ fontSize: '12px', color: '#6b7370', textTransform: 'uppercase', letterSpacing: '1px' }}>{stat.label}</div></div>))}
+              {[{ label: 'Total Courses', value: courses.length, icon: '📚' }, { label: 'Providers', value: new Set(courses.map(c => c.provider)).size, icon: '🏫' }, { label: 'Free Courses', value: courses.filter(c => c.price === 'Free').length, icon: '🎓' }, { label: 'Categories', value: new Set(courses.map(c => c.category)).size, icon: '🏷️' }].map((stat, i) => (<div key={i} style={{ ...sharedStyles.card, textAlign: 'center', padding: '20px' }}><span style={{ fontSize: '24px' }}>{stat.icon}</span><div style={{ fontSize: '28px', fontWeight: 700, color: '#fff', margin: '8px 0 4px' }}>{stat.value}</div><div style={{ fontSize: '12px', color: '#6b7370', textTransform: 'uppercase', letterSpacing: '1px' }}>{stat.label}</div></div>))}
             </div>
             <div style={{ display: 'flex', gap: '12px', marginBottom: '32px', flexWrap: 'wrap' }}>
               {levels.map(l => (<button key={l} onClick={() => setSelectedLevel(l)} style={{ padding: '8px 20px', borderRadius: '20px', border: selectedLevel === l ? 'none' : '1px solid rgba(255,255,255,0.1)', background: selectedLevel === l ? '#5c6ac4' : 'transparent', color: selectedLevel === l ? '#fff' : '#6b7370', cursor: 'pointer', fontSize: '14px', fontWeight: 500 }}>{l}</button>))}
@@ -2298,8 +2296,8 @@
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}><span style={{ fontSize: '14px', fontWeight: 600, color: '#5c6ac4' }}>{course.provider}</span><span style={{ fontSize: '11px', padding: '4px 10px', borderRadius: '12px', background: `${levelColors[course.level]}22`, color: levelColors[course.level], fontWeight: 600 }}>{course.level}</span></div>
               <h3 style={{ fontSize: '18px', fontWeight: 600, color: '#fff', marginBottom: '8px', lineHeight: 1.3 }}>{course.title}</h3>
               <p style={{ fontSize: '13px', color: '#6b7370', marginBottom: '16px', lineHeight: 1.5, flex: 1 }}>{course.description}</p>
-              <div style={{ display: 'flex', gap: '16px', marginBottom: '16px', fontSize: '12px', color: '#6b7370' }}><span>🕐 {course.duration}</span><span>👥 {course.students.toLocaleString()}</span><span>⭐ {course.rating}</span></div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '16px' }}><span style={{ fontSize: '22px', fontWeight: 700, color: course.price === 'Free' ? '#7dd3c0' : '#fff' }}>{course.price}</span><button style={{ ...sharedStyles.button, padding: '10px 24px', fontSize: '14px' }}>Enroll</button></div>
+              <div style={{ display: 'flex', gap: '16px', marginBottom: '16px', fontSize: '12px', color: '#6b7370' }}><span>🕐 {course.duration}</span><span>🏷️ {course.category}</span></div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '16px' }}><span style={{ fontSize: '22px', fontWeight: 700, color: course.price === 'Free' ? '#7dd3c0' : '#fff' }}>{course.price}</span><button onClick={() => course.url && course.url !== '#' && window.open(course.url, '_blank')} style={{ ...sharedStyles.button, padding: '10px 24px', fontSize: '14px' }}>View Program</button></div>
             </div>))}</div>
             {filtered.length === 0 && <div style={{ textAlign: 'center', padding: '60px', color: '#6b7370' }}><p style={{ fontSize: '18px' }}>No courses match your filters</p></div>}
           </div>
