@@ -81,7 +81,12 @@ export class PostgresStorage implements StorageBackend {
     logger.info(`[PostgresStorage] Upserted ${data.length} items to ${type}`);
   }
 
-  private async insertRows(client: pg.PoolClient, type: DataType, data: CrawledData[]): Promise<void> {
+  private async insertRows(client: pg.PoolClient, type: DataType, rows: CrawledData[]): Promise<void> {
+    // Defensive dedupe (last occurrence wins): duplicate ids within one
+    // INSERT ... ON CONFLICT statement make Postgres error with
+    // "ON CONFLICT DO UPDATE command cannot affect row a second time".
+    const data = Array.from(new Map(rows.map(item => [item.id, item])).values());
+
     const BATCH = 500;
     for (let i = 0; i < data.length; i += BATCH) {
       const batch = data.slice(i, i + BATCH);
