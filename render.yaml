@@ -1,0 +1,59 @@
+# Render Blueprint — deploy the whole Neuly platform with one click.
+# https://render.com/docs/blueprint-spec
+#
+# What this creates:
+#   1. neuly-db        — managed Postgres (all datasets, accounts, change log)
+#   2. neuly-web       — API + frontend (Express serves index.html and /api/*)
+#   3. neuly-scheduler — background worker running every crawler on its cadence
+#
+# After the first deploy, the scheduler's RUN_ON_START=true kicks off a full
+# crawl immediately, so real data replaces the seed within the first hour.
+#
+# Set these in the Render dashboard after creation (Environment → neuly-web):
+#   SITE_URL             https://your-domain.com (SEO pages, sitemap, Stripe redirects)
+#   RESEND_API_KEY       email delivery for alerts + newsletter (resend.com)
+#   MAIL_FROM            e.g. "Neuly <alerts@your-domain.com>"
+#   STRIPE_SECRET_KEY    + STRIPE_PRICE_PRO, STRIPE_PRICE_ENTERPRISE, STRIPE_WEBHOOK_SECRET
+# And for the scheduler (Environment → neuly-scheduler):
+#   LEGISCAN_API_KEY     state bill tracking (free key: legiscan.com/legiscan)
+#   NCBI_API_KEY         faster PubMed crawls
+#   OPENALEX_MAILTO      polite-pool access for citation enrichment
+
+databases:
+  - name: neuly-db
+    plan: basic-256mb
+    postgresMajorVersion: "16"
+
+services:
+  - type: web
+    name: neuly-web
+    runtime: node
+    plan: starter
+    buildCommand: cd crawlers && npm ci
+    startCommand: cd crawlers && npm run deploy:start
+    healthCheckPath: /api/health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: neuly-db
+          property: connectionString
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: LOG_LEVEL
+        value: info
+
+  - type: worker
+    name: neuly-scheduler
+    runtime: node
+    plan: starter
+    buildCommand: cd crawlers && npm ci
+    startCommand: cd crawlers && npm run schedule
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: neuly-db
+          property: connectionString
+      - key: RUN_ON_START
+        value: "true"
+      - key: LOG_LEVEL
+        value: info

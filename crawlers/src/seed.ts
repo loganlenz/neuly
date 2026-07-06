@@ -770,6 +770,16 @@ const events = [
 // SEED DATA
 // ============================================
 async function seed() {
+  // --if-empty: deploy-time guard — never overwrite data a crawler has written
+  if (process.argv.includes('--if-empty')) {
+    const existing = await storage.load('companies');
+    if (existing.length > 0) {
+      logger.info(`Seed skipped: storage already has ${existing.length} companies (--if-empty)`);
+      await storage.close();
+      return;
+    }
+  }
+
   logger.info('='.repeat(50));
   logger.info('Seeding Neuly database with initial data');
   logger.info('='.repeat(50));

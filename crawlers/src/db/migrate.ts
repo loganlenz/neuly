@@ -10,6 +10,11 @@ import { logger } from '../utils/logger.js';
 async function migrate(): Promise<void> {
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) {
+    // --if-configured: deploy-time mode — JSON storage needs no migration
+    if (process.argv.includes('--if-configured')) {
+      logger.info('DATABASE_URL not set — skipping migration (JSON storage mode)');
+      return;
+    }
     logger.error('DATABASE_URL is not set. Example: postgresql://neuly:neuly@127.0.0.1:5432/neuly');
     process.exit(1);
   }

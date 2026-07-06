@@ -25,6 +25,8 @@
     "schedule": "tsx src/scheduler.ts",
     "db:migrate": "tsx src/db/migrate.ts",
     "seed": "tsx src/seed.ts",
+    "seed:if-empty": "tsx src/seed.ts --if-empty",
+    "deploy:start": "tsx src/db/migrate.ts --if-configured && npm run seed:if-empty && npm run server",
     "setup": "npm run seed && npm run server",
     "lint": "eslint src/",
     "test": "vitest run"
