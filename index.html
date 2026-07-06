@@ -272,7 +272,50 @@
 
     const useApiData = () => useContext(DataContext);
 
-    const logoBase64 = "data:image/webp;base64,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";
+    // Neuly brand mark (cloud icon only). The wordmark is real HTML text so it
+    // always sits on the same baseline as neighboring text at any size.
+    const logoMarkBase64 = "data:image/webp;base64,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";
+
+    const NeulyLogo = ({ height = 24, suffix, color = '#fff', onClick, style }) => (
+      <span onClick={onClick} style={{ display: 'inline-flex', alignItems: 'center', gap: '9px', cursor: onClick ? 'pointer' : 'default', ...style }}>
+        <img src={logoMarkBase64} alt="Neuly" style={{ height: `${Math.round(height * 1.15)}px`, width: 'auto' }} />
+        <span style={{ fontSize: `${height}px`, fontWeight: 700, color, letterSpacing: '-0.5px', lineHeight: 1 }}>neuly</span>
+        {suffix && <span style={{ fontSize: `${height}px`, fontWeight: 300, color: '#7dd3c0', lineHeight: 1 }}>{suffix}</span>}
+      </span>
+    );
+
+    // Homepage section backgrounds — each container gets its own texture so the
+    // page reads as distinct layers instead of one continuous dark field.
+    const sectionTextures = {
+      // teal dot-grid with a soft glow falling from the top
+      substances: {
+        background: 'radial-gradient(rgba(125,211,192,0.09) 1px, transparent 1.5px), radial-gradient(ellipse 80% 55% at 50% 0%, rgba(125,211,192,0.07) 0%, transparent 60%), #0b100e',
+        backgroundSize: '28px 28px, auto, auto',
+        borderTop: '1px solid rgba(125,211,192,0.10)',
+        borderBottom: '1px solid rgba(255,255,255,0.04)'
+      },
+      // fine blue blueprint grid
+      research: {
+        background: 'linear-gradient(rgba(168,197,226,0.045) 1px, transparent 1px), linear-gradient(90deg, rgba(168,197,226,0.045) 1px, transparent 1px), linear-gradient(180deg, #0a0f0d 0%, #0b0f13 100%)',
+        backgroundSize: '44px 44px, 44px 44px, auto'
+      },
+      // warm amber wash drifting in from the top-right
+      people: {
+        background: 'radial-gradient(ellipse 70% 55% at 85% 0%, rgba(240,183,117,0.08) 0%, transparent 60%), radial-gradient(ellipse 50% 40% at 10% 100%, rgba(212,165,201,0.06) 0%, transparent 60%), linear-gradient(180deg, #0a0f0d 0%, #100e0c 100%)',
+        borderTop: '1px solid rgba(240,183,117,0.08)'
+      },
+      // indigo glow + dots for the Care band
+      care: {
+        background: 'radial-gradient(rgba(92,106,196,0.10) 1px, transparent 1.5px), radial-gradient(ellipse 60% 80% at 50% 50%, rgba(92,106,196,0.10) 0%, transparent 70%), linear-gradient(180deg, #0a0f0d 0%, #0a0f17 50%, #0a0f0d 100%)',
+        backgroundSize: '32px 32px, auto, auto',
+        borderTop: '1px solid rgba(92,106,196,0.12)',
+        borderBottom: '1px solid rgba(92,106,196,0.12)'
+      },
+      // teal spotlight behind the closing call-to-action
+      finalCta: {
+        background: 'radial-gradient(ellipse 55% 65% at 50% 45%, rgba(125,211,192,0.09) 0%, transparent 70%)'
+      }
+    };
 
     const sharedStyles = {
       container: { minHeight: '100vh', backgroundColor: '#0a0f0d', color: '#e8ebe9', fontFamily: '"DM Sans", sans-serif', position: 'relative' },
@@ -519,7 +562,7 @@
         return (
           <>
             <nav style={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 100, padding: 'calc(10px + env(safe-area-inset-top)) 20px 10px', backgroundColor: 'rgba(10, 15, 13, 0.95)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)', borderBottom: '1px solid rgba(255,255,255,0.06)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <img src={logoBase64} alt="Neuly" style={{ height: '28px', filter: 'brightness(0) invert(1)', objectFit: 'contain' }} onClick={() => setCurrentPage('dashboard')} />
+              <NeulyLogo height={20} onClick={() => setCurrentPage('dashboard')} />
               <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'linear-gradient(135deg, #7dd3c0 0%, #a8c5e2 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '14px', fontWeight: 600, color: '#0a0f0d' }}>{user.name.charAt(0)}</div>
             </nav>
             <MobileTabBar user={user} setUser={setUser} currentPage={currentPage} setCurrentPage={setCurrentPage} />
@@ -531,7 +574,7 @@
       if (isMobile) {
         return (
           <nav style={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 100, padding: 'calc(10px + env(safe-area-inset-top)) 20px 10px', backgroundColor: scrolled ? 'rgba(10, 15, 13, 0.95)' : 'transparent', backdropFilter: scrolled ? 'blur(20px)' : 'none', WebkitBackdropFilter: scrolled ? 'blur(20px)' : 'none', transition: 'all 0.3s', borderBottom: scrolled ? '1px solid rgba(255,255,255,0.06)' : 'none', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <img src={logoBase64} alt="Neuly" style={{ height: '28px', filter: 'brightness(0) invert(1)', objectFit: 'contain' }} onClick={() => setCurrentPage('home')} />
+            <NeulyLogo height={20} onClick={() => setCurrentPage('home')} />
             <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
               <button onClick={() => setUser({ name: 'Logan', email: 'logan@example.com' })} style={{ background: 'transparent', border: 'none', color: '#e8ebe9', fontSize: '14px', fontWeight: 500, cursor: 'pointer', padding: '10px 12px' }}>Log In</button>
               <button onClick={() => { setUser({ name: 'Logan', email: 'logan@example.com' }); setCurrentPage('dashboard'); }} style={{ background: '#7dd3c0', border: 'none', color: '#0a0f0d', fontSize: '14px', fontWeight: 600, padding: '10px 18px', borderRadius: '10px', cursor: 'pointer' }}>Join Free</button>
@@ -543,7 +586,7 @@
       return (
         <nav style={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 100, padding: '16px 0', backgroundColor: scrolled ? 'rgba(10, 15, 13, 0.95)' : 'transparent', backdropFilter: scrolled ? 'blur(20px)' : 'none', transition: 'all 0.3s', borderBottom: scrolled ? '1px solid rgba(255,255,255,0.06)' : 'none' }}>
           <div style={{ maxWidth: '1280px', margin: '0 auto', padding: '0 40px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <img src={logoBase64} alt="Neuly" style={{ height: '36px', filter: 'brightness(0) invert(1)', objectFit: 'contain', cursor: 'pointer' }} onClick={() => setCurrentPage(user ? 'dashboard' : 'home')} />
+            <NeulyLogo height={24} onClick={() => setCurrentPage(user ? 'dashboard' : 'home')} />
             <div style={{ display: 'flex', gap: '28px' }}>
               {navItems.map(([page, label]) => (
                 <span key={page} onClick={() => setCurrentPage(page)} style={{ color: currentPage === page ? '#7dd3c0' : '#a0a8a4', fontSize: '14px', fontWeight: 500, cursor: 'pointer', transition: 'color 0.2s' }}>{label}</span>
@@ -683,7 +726,8 @@
         { name: 'Cannabis', count: 1240, color: '#e8c898', desc: 'Cannabinoid research' }
       ];
       return (
-        <section style={{ ...sharedStyles.section, paddingTop: '60px' }}>
+        <section style={{ ...sectionTextures.substances, padding: '80px 0 100px' }}>
+          <div style={{ ...sharedStyles.section, padding: '0 40px', maxWidth: '1280px', margin: '0 auto' }}>
           <h2 style={sharedStyles.sectionTitle}>Explore by Substance</h2>
           <p style={sharedStyles.sectionSubtitle}>Browse our comprehensive database of natural medicine research.</p>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '20px' }}>
@@ -703,17 +747,17 @@
               </div>
             ))}
           </div>
+          </div>
         </section>
       );
     };
 
     // Homepage sections
     const ResearchHomeSection = () => (
-      <section style={{ background: 'linear-gradient(180deg, #0a0f0d 0%, #0d1210 100%)', padding: '100px 0' }}>
+      <section style={{ ...sectionTextures.research, padding: '100px 0' }}>
         <div style={{ maxWidth: '1280px', margin: '0 auto', padding: '0 40px', textAlign: 'center' }}>
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
-            <img src={logoBase64} alt="" style={{ height: '28px', filter: 'brightness(0) invert(1)', opacity: 0.9 }} />
-            <span style={{ fontSize: '28px', fontWeight: 300, color: '#7dd3c0' }}>research</span>
+            <NeulyLogo height={28} suffix="research" />
           </div>
           <h2 style={sharedStyles.sectionTitle}>Explore the Latest Research</h2>
           <p style={sharedStyles.sectionSubtitle}>Access peer-reviewed studies from leading journals worldwide.</p>
@@ -724,25 +768,19 @@
 
     // NEW: Companies Homepage Section
     const CompaniesHomeSection = ({ setCurrentPage }) => {
-      const featuredCompanies = [
-        { name: 'COMPASS Pathways', type: 'Biotech', stage: 'Public', substances: ['Psilocybin'], logo: '🧭' },
-        { name: 'Lykos Therapeutics', type: 'Non-Profit', stage: 'Private', substances: ['MDMA'], logo: '🗺️' },
-        { name: 'MindMed', type: 'Biotech', stage: 'Public', substances: ['LSD'], logo: '💭' },
-        { name: 'Cybin', type: 'Biotech', stage: 'Public', substances: ['Psilocybin'], logo: '🧬' },
-        { name: 'Atai Life Sciences', type: 'Biotech', stage: 'Public', substances: ['Multiple'], logo: '🔬' },
-        { name: 'Numinus Wellness', type: 'Healthcare', stage: 'Public', substances: ['Ketamine'], logo: '✨' },
-      ];
+      const apiData = useApiData();
+      const featuredCompanies = (apiData?.companies || []).slice(0, 6).map(normalizeCompany);
+      const companyCount = apiData?.stats?.counts?.companies;
       return (
         <section style={{ background: '#f5f5f5', padding: '100px 0' }}>
           <div style={{ maxWidth: '1280px', margin: '0 auto', padding: '0 40px' }}>
             <div style={{ textAlign: 'center', marginBottom: '16px' }}>
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
-                <img src={logoBase64} alt="" style={{ height: '28px' }} />
-                <span style={{ fontSize: '28px', fontWeight: 300, color: '#7dd3c0' }}>companies</span>
+                <NeulyLogo height={28} suffix="companies" color="#1a1f1d" />
               </span>
             </div>
             <h2 style={{ ...sharedStyles.sectionTitle, color: '#1a1f1d' }}>Discover Industry Leaders</h2>
-            <p style={{ ...sharedStyles.sectionSubtitle, color: '#6b7370' }}>Explore 150+ companies advancing natural medicine research, from biotech pioneers to clinical service providers.</p>
+            <p style={{ ...sharedStyles.sectionSubtitle, color: '#6b7370' }}>Explore {companyCount != null ? companyCount.toLocaleString() : 'the'} companies advancing natural medicine research, from biotech pioneers to clinical service providers.</p>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '24px', marginBottom: '48px' }}>
               {featuredCompanies.map((company, i) => (
                 <div key={i} style={{ background: '#fff', borderRadius: '16px', padding: '28px', boxShadow: '0 2px 12px rgba(0,0,0,0.06)' }}>
@@ -774,25 +812,22 @@
 
     // NEW: People Homepage Section
     const PeopleHomeSection = ({ setCurrentPage }) => {
-      const featuredPeople = [
-        { name: 'Dr. Robin Carhart-Harris', role: 'Director, Neuroscape', org: 'UCSF', image: '👨‍🔬' },
-        { name: 'Rick Doblin, PhD', role: 'Founder', org: 'MAPS', image: '👨‍💼' },
-        { name: 'Dr. Matthew Johnson', role: 'Professor', org: 'Johns Hopkins', image: '👨‍⚕️' },
-        { name: 'Dr. Rachel Yehuda', role: 'Professor', org: 'Mount Sinai', image: '👩‍🔬' },
-        { name: 'George Goldsmith', role: 'CEO', org: 'COMPASS Pathways', image: '👨‍💼' },
-        { name: 'Doug Drysdale', role: 'CEO', org: 'Cybin', image: '👨‍💼' },
-      ];
+      const apiData = useApiData();
+      const featuredPeople = (apiData?.people || []).slice(0, 6).map(p => {
+        const n = normalizePerson(p);
+        return { name: n.name, role: n.title || n.role, org: n.org, image: n.image };
+      });
+      const peopleCount = apiData?.stats?.counts?.people;
       return (
-        <section style={{ position: 'relative', padding: '100px 40px', background: 'linear-gradient(180deg, #0a0f0d 0%, #0d1210 100%)' }}>
+        <section style={{ position: 'relative', padding: '100px 40px', ...sectionTextures.people }}>
           <div style={{ maxWidth: '1280px', margin: '0 auto' }}>
             <div style={{ textAlign: 'center', marginBottom: '16px' }}>
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
-                <img src={logoBase64} alt="" style={{ height: '28px', filter: 'brightness(0) invert(1)' }} />
-                <span style={{ fontSize: '28px', fontWeight: 300, color: '#7dd3c0' }}>people</span>
+                <NeulyLogo height={28} suffix="people" />
               </span>
             </div>
             <h2 style={sharedStyles.sectionTitle}>Connect with Industry Leaders</h2>
-            <p style={sharedStyles.sectionSubtitle}>Network with 500+ researchers, executives, clinicians, and advocates shaping the future of natural medicine.</p>
+            <p style={sharedStyles.sectionSubtitle}>Network with {peopleCount != null ? peopleCount.toLocaleString() : 'the'} researchers, executives, clinicians, and advocates shaping the future of natural medicine.</p>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '24px', marginBottom: '48px' }}>
               {featuredPeople.map((person, i) => (
                 <div key={i} style={{ ...sharedStyles.card, textAlign: 'center' }}>
@@ -815,8 +850,7 @@
       <section style={{ background: '#f5f5f5', padding: '100px 0' }}>
         <div style={{ maxWidth: '1280px', margin: '0 auto', padding: '0 40px', textAlign: 'center' }}>
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
-            <img src={logoBase64} alt="" style={{ height: '28px' }} />
-            <span style={{ fontSize: '28px', fontWeight: 300, color: '#7dd3c0' }}>edu</span>
+            <NeulyLogo height={28} suffix="edu" color="#1a1f1d" />
           </div>
           <h2 style={{ ...sharedStyles.sectionTitle, color: '#1a1f1d' }}>Find Courses That Can Launch Your Career</h2>
           <p style={{ ...sharedStyles.sectionSubtitle, color: '#6b7370' }}>Therapists and practitioners are needed to lead the growth of plant medicine therapy.</p>
@@ -826,11 +860,10 @@
     );
 
     const CareHomeSection = () => (
-      <section style={{ position: 'relative', padding: '140px 40px', textAlign: 'center', background: 'linear-gradient(180deg, #0a0f0d 0%, #0a1015 50%, #0a0f0d 100%)' }}>
+      <section style={{ position: 'relative', padding: '140px 40px', textAlign: 'center', ...sectionTextures.care }}>
         <div style={{ maxWidth: '900px', margin: '0 auto' }}>
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', marginBottom: '24px' }}>
-            <img src={logoBase64} alt="" style={{ height: '36px', filter: 'brightness(0) invert(1)' }} />
-            <span style={{ fontSize: '36px', fontWeight: 300, color: '#7dd3c0' }}>care</span>
+            <NeulyLogo height={36} suffix="care" />
           </div>
           <h2 style={{ fontFamily: '"Fraunces", serif', fontSize: '52px', fontWeight: 600, color: '#fff', marginBottom: '24px', lineHeight: 1.15 }}>Find Legal Plant Medicine Therapy</h2>
           <button style={{ ...sharedStyles.buttonDark, background: '#5c6ac4', padding: '18px 40px' }}>Use Neuly Care</button>
@@ -839,7 +872,7 @@
     );
 
     const FinalCTA = ({ setUser, setCurrentPage }) => (
-      <section style={{ padding: '120px 40px', textAlign: 'center', position: 'relative', zIndex: 1 }}>
+      <section style={{ padding: '120px 40px', textAlign: 'center', position: 'relative', zIndex: 1, ...sectionTextures.finalCta }}>
         <div style={{ maxWidth: '700px', margin: '0 auto' }}>
           <h2 style={{ fontFamily: '"Fraunces", serif', fontSize: '48px', fontWeight: 600, color: '#fff', marginBottom: '16px' }}>Ready to explore?</h2>
           <p style={{ fontSize: '18px', color: '#a0a8a4', marginBottom: '40px' }}>Join thousands advancing the science of natural medicine.</p>
@@ -1048,8 +1081,7 @@
           <div style={{ padding: '40px', maxWidth: '1280px', margin: '0 auto' }}>
             <div style={{ textAlign: 'center', marginBottom: '48px' }}>
               <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
-                <img src={logoBase64} alt="" style={{ height: '32px', filter: 'brightness(0) invert(1)' }} />
-                <span style={{ fontSize: '32px', fontWeight: 300, color: '#7dd3c0' }}>companies</span>
+                <NeulyLogo height={32} suffix="companies" />
               </div>
               <h1 style={{ fontFamily: '"Fraunces", serif', fontSize: '42px', fontWeight: 600, color: '#fff', marginBottom: '12px' }}>Industry Companies</h1>
               <p style={{ fontSize: '18px', color: '#a0a8a4', maxWidth: '600px', margin: '0 auto' }}>Discover and track companies advancing natural medicine research and therapies.</p>
@@ -1241,8 +1273,7 @@
           <div style={{ padding: '40px', maxWidth: '1280px', margin: '0 auto' }}>
             <div style={{ textAlign: 'center', marginBottom: '48px' }}>
               <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
-                <img src={logoBase64} alt="" style={{ height: '32px', filter: 'brightness(0) invert(1)' }} />
-                <span style={{ fontSize: '32px', fontWeight: 300, color: '#7dd3c0' }}>people</span>
+                <NeulyLogo height={32} suffix="people" />
               </div>
               <h1 style={{ fontFamily: '"Fraunces", serif', fontSize: '42px', fontWeight: 600, color: '#fff', marginBottom: '12px' }}>Industry People</h1>
               <p style={{ fontSize: '18px', color: '#a0a8a4', maxWidth: '600px', margin: '0 auto' }}>Connect with researchers, executives, clinicians, and advocates leading the natural medicine industry.</p>
@@ -2241,7 +2272,7 @@
       return (
         <div style={{ position: 'relative', zIndex: 1, paddingTop: '100px', minHeight: '100vh' }}>
           <div style={{ padding: '40px', maxWidth: '1280px', margin: '0 auto' }}>
-            <div style={{ textAlign: 'center', marginBottom: '48px' }}><div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}><img src={logoBase64} alt="" style={{ height: '32px', filter: 'brightness(0) invert(1)' }} /><span style={{ fontSize: '32px', fontWeight: 300, color: '#7dd3c0' }}>edu</span></div><h1 style={{ fontFamily: '"Fraunces", serif', fontSize: '42px', fontWeight: 600, color: '#fff', marginBottom: '12px' }}>Education</h1><p style={{ fontSize: '16px', color: '#6b7370', maxWidth: '600px', margin: '0 auto' }}>Professional training and courses in psychedelic-assisted therapy, research, and harm reduction</p></div>
+            <div style={{ textAlign: 'center', marginBottom: '48px' }}><div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}><NeulyLogo height={32} suffix="edu" /></div><h1 style={{ fontFamily: '"Fraunces", serif', fontSize: '42px', fontWeight: 600, color: '#fff', marginBottom: '12px' }}>Education</h1><p style={{ fontSize: '16px', color: '#6b7370', maxWidth: '600px', margin: '0 auto' }}>Professional training and courses in psychedelic-assisted therapy, research, and harm reduction</p></div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', marginBottom: '32px' }}>
               {[{ label: 'Total Courses', value: courses.length, icon: '📚' }, { label: 'Total Students', value: courses.reduce((s, c) => s + c.students, 0).toLocaleString(), icon: '🎓' }, { label: 'Avg Rating', value: (courses.reduce((s, c) => s + c.rating, 0) / courses.length).toFixed(1), icon: '⭐' }, { label: 'Providers', value: new Set(courses.map(c => c.provider)).size, icon: '🏫' }].map((stat, i) => (<div key={i} style={{ ...sharedStyles.card, textAlign: 'center', padding: '20px' }}><span style={{ fontSize: '24px' }}>{stat.icon}</span><div style={{ fontSize: '28px', fontWeight: 700, color: '#fff', margin: '8px 0 4px' }}>{stat.value}</div><div style={{ fontSize: '12px', color: '#6b7370', textTransform: 'uppercase', letterSpacing: '1px' }}>{stat.label}</div></div>))}
             </div>
@@ -2287,7 +2318,7 @@
       return (
         <div style={{ position: 'relative', zIndex: 1, paddingTop: '100px', minHeight: '100vh' }}>
           <div style={{ padding: '40px', maxWidth: '1280px', margin: '0 auto' }}>
-            <div style={{ textAlign: 'center', marginBottom: '48px' }}><div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}><img src={logoBase64} alt="" style={{ height: '32px', filter: 'brightness(0) invert(1)' }} /><span style={{ fontSize: '32px', fontWeight: 300, color: '#7dd3c0' }}>care</span></div><h1 style={{ fontFamily: '"Fraunces", serif', fontSize: '42px', fontWeight: 600, color: '#fff', marginBottom: '12px' }}>Care Directory</h1><p style={{ fontSize: '16px', color: '#6b7370', maxWidth: '600px', margin: '0 auto' }}>Find trusted psychedelic therapy clinics, retreat centers, and integrative care providers worldwide</p></div>
+            <div style={{ textAlign: 'center', marginBottom: '48px' }}><div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}><NeulyLogo height={32} suffix="care" /></div><h1 style={{ fontFamily: '"Fraunces", serif', fontSize: '42px', fontWeight: 600, color: '#fff', marginBottom: '12px' }}>Care Directory</h1><p style={{ fontSize: '16px', color: '#6b7370', maxWidth: '600px', margin: '0 auto' }}>Find trusted psychedelic therapy clinics, retreat centers, and integrative care providers worldwide</p></div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', marginBottom: '32px' }}>
               {[{ label: 'Providers', value: providers.length, icon: '🏥' }, { label: 'Countries', value: new Set(providers.map(p => p.location.split(', ').pop())).size, icon: '🌍' }, { label: 'Avg Rating', value: (providers.reduce((s, p) => s + p.rating, 0) / providers.length).toFixed(1), icon: '⭐' }, { label: 'Accept Insurance', value: providers.filter(p => p.insurance).length, icon: '🛡️' }].map((stat, i) => (<div key={i} style={{ ...sharedStyles.card, textAlign: 'center', padding: '20px' }}><span style={{ fontSize: '24px' }}>{stat.icon}</span><div style={{ fontSize: '28px', fontWeight: 700, color: '#fff', margin: '8px 0 4px' }}>{stat.value}</div><div style={{ fontSize: '12px', color: '#6b7370', textTransform: 'uppercase', letterSpacing: '1px' }}>{stat.label}</div></div>))}
             </div>
@@ -2339,8 +2370,7 @@
           <div style={{ padding: '40px', maxWidth: '1280px', margin: '0 auto' }}>
             <div style={{ textAlign: 'center', marginBottom: '48px' }}>
               <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
-                <img src={logoBase64} alt="" style={{ height: '32px', filter: 'brightness(0) invert(1)' }} />
-                <span style={{ fontSize: '32px', fontWeight: 300, color: '#7dd3c0' }}>studies</span>
+                <NeulyLogo height={32} suffix="studies" />
               </div>
               <h1 style={{ fontFamily: '"Fraunces", serif', fontSize: '42px', fontWeight: 600, color: '#fff', marginBottom: '12px' }}>Clinical Studies</h1>
               <p style={{ fontSize: '18px', color: '#a0a8a4', maxWidth: '600px', margin: '0 auto' }}>Discover and enroll in psychedelic medicine research studies</p>
@@ -2421,8 +2451,7 @@
           <div style={{ padding: '40px', maxWidth: '1280px', margin: '0 auto' }}>
             <div style={{ textAlign: 'center', marginBottom: '48px' }}>
               <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
-                <img src={logoBase64} alt="" style={{ height: '32px', filter: 'brightness(0) invert(1)' }} />
-                <span style={{ fontSize: '32px', fontWeight: 300, color: '#7dd3c0' }}>jobs</span>
+                <NeulyLogo height={32} suffix="jobs" />
               </div>
               <h1 style={{ fontFamily: '"Fraunces", serif', fontSize: '42px', fontWeight: 600, color: '#fff', marginBottom: '12px' }}>Industry Jobs</h1>
               <p style={{ fontSize: '18px', color: '#a0a8a4', maxWidth: '600px', margin: '0 auto' }}>Find your next role in the natural medicine and psychedelic industry.</p>
@@ -2512,8 +2541,7 @@
           <div style={{ padding: '40px', maxWidth: '1280px', margin: '0 auto' }}>
             <div style={{ textAlign: 'center', marginBottom: '48px' }}>
               <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
-                <img src={logoBase64} alt="" style={{ height: '32px', filter: 'brightness(0) invert(1)' }} />
-                <span style={{ fontSize: '32px', fontWeight: 300, color: '#7dd3c0' }}>events</span>
+                <NeulyLogo height={32} suffix="events" />
               </div>
               <h1 style={{ fontFamily: '"Fraunces", serif', fontSize: '42px', fontWeight: 600, color: '#fff', marginBottom: '12px' }}>Industry Events</h1>
               <p style={{ fontSize: '18px', color: '#a0a8a4', maxWidth: '600px', margin: '0 auto' }}>Connect with the community at conferences, webinars, and workshops.</p>
@@ -2608,8 +2636,8 @@
     const Footer = () => (
       <footer style={{ borderTop: '1px solid rgba(255,255,255,0.06)', padding: '60px 40px 40px', position: 'relative', zIndex: 1 }}>
         <div style={{ maxWidth: '1280px', margin: '0 auto', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '24px' }}>
-          <img src={logoBase64} alt="Neuly" style={{ height: '28px', filter: 'brightness(0) invert(1)' }} />
-          <p style={{ fontSize: '13px', color: '#4a524e' }}>© 2025 Neuly. All rights reserved.</p>
+          <NeulyLogo height={18} />
+          <p style={{ fontSize: '13px', color: '#4a524e' }}>© 2026 Neuly. All rights reserved.</p>
         </div>
       </footer>
     );
