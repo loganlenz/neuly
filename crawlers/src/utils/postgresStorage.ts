@@ -116,7 +116,7 @@ export class PostgresStorage implements StorageBackend {
     }
 
     const history = await this.pool.query(
-      `SELECT data_type, item_count, duration_ms, ran_at
+      `SELECT data_type, item_count, duration_ms, error, ran_at
        FROM crawl_runs ORDER BY ran_at DESC LIMIT 100`
     );
 
@@ -127,7 +127,8 @@ export class PostgresStorage implements StorageBackend {
         type: row.data_type as DataType,
         timestamp: row.ran_at.toISOString(),
         count: row.item_count,
-        duration: row.duration_ms
+        duration: row.duration_ms,
+        ...(row.error ? { error: row.error } : {})
       }))
     };
   }
@@ -136,6 +137,14 @@ export class PostgresStorage implements StorageBackend {
     await this.pool.query(
       'INSERT INTO crawl_runs (data_type, item_count, duration_ms) VALUES ($1, $2, $3)',
       [type, count, durationMs]
+    );
+  }
+
+  /** Record a failed crawl run so /api/stats shows what broke and why. */
+  async recordFailure(type: DataType, error: string): Promise<void> {
+    await this.pool.query(
+      'INSERT INTO crawl_runs (data_type, item_count, duration_ms, error) VALUES ($1, 0, 0, $2)',
+      [type, error.slice(0, 500)]
     );
   }
 

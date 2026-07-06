@@ -22,6 +22,9 @@ export interface StorageBackend {
   delete(type: DataType, ids: string[]): Promise<void>;
   getStats(): Promise<DataManifest | null>;
 
+  /** Record a failed crawl run (visible in getStats crawlHistory). */
+  recordFailure(type: DataType, error: string): Promise<void>;
+
   saveChangeEvents(events: ChangeEvent[]): Promise<void>;
   loadChangeEvents(query?: ChangeEventQuery): Promise<ChangeEvent[]>;
 
