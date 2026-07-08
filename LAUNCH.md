@@ -62,14 +62,33 @@ docker run -e DATABASE_URL=postgres://... -e RUN_ON_START=true neuly npm run sch
 - [ ] LegiScan + NCBI keys added to the scheduler
 - [ ] Resend key added; send yourself a test alert (`POST /api/alerts`)
 - [ ] Stripe keys + webhook endpoint `https://<domain>/api/billing/webhook`
+- [ ] Sign up through the site UI (Join Free), save a company, sign out and
+      log back in — confirms accounts, sessions, and `/api/saves` end-to-end
 - [ ] Sign up, save an alert, upgrade to Pro end-to-end once in production
+
+## What shipped in the launch-readiness pass
+
+- **Real accounts in the UI** — Join Free / Log In / Get Started open a
+  signup/login modal wired to `/api/auth/*` with session cookies (works
+  cross-origin too: `SameSite=None` cookies + CORS credentials in production).
+- **Save/Follow persist** — every Save/Follow button writes to `/api/saves`
+  (new `saved_items` table); the dashboard, Companies, and People "saved" /
+  "following" tabs read it back.
+- **No more demo content** — dashboard shows real change events from
+  `/api/changes` and the user's real saved items; homepage substance counts
+  come from `/api/dashboard`; person profiles list real papers matched by
+  author name; the Care directory no longer displays invented ratings.
+- **Research Agent is honest** — keyword search over the live papers/trials
+  tables with linked sources; agents and query history persist locally.
+- **All buttons work** — studies link to ClinicalTrials.gov, jobs to their
+  ATS posting, events/courses/providers to their sites.
 
 ## Known post-launch work (in priority order)
 
-1. **Research Agent answers are canned** — wire `ResearchAgentPage` to a real
-   LLM endpoint (server-side, keyed) that searches the papers/trials tables.
-2. **Dashboard "Recent Activity" and "Saved Items" are demo content** — needs
-   per-user activity tracking (the auth system already exists).
-3. **Save/Follow buttons are visual only** — persist per-user in Postgres.
-4. Remaining datasets from `RELAUNCH_BUILD_PLAN.md` Part 1 (legislation,
+1. **Research Agent LLM synthesis** — answers are currently transparent
+   keyword search + real sources; a server-side LLM endpoint could add
+   narrative synthesis on top.
+2. Remaining datasets from `RELAUNCH_BUILD_PLAN.md` Part 1 (legislation,
    funding, grants, readouts already have API endpoints — build their pages).
+3. Per-user activity tracking (page views, queries) if wanted on the
+   dashboard alongside saved items.

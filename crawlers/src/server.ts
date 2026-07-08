@@ -8,6 +8,7 @@ import { existsSync } from 'fs';
 import { DataType } from './utils/storage.js';
 import { createStorage } from './utils/storageBackend.js';
 import { attachUser, authRouter, apiKeysRouter, requirePlan, AuthedRequest } from './auth/auth.js';
+import { savesRouter } from './user/saves.js';
 import { alertsRouter } from './alerts/alerts.js';
 import { billingRouter, handleStripeWebhook } from './billing/stripe.js';
 import { seoRouter } from './web/seoPages.js';
@@ -36,8 +37,9 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 const storage = await createStorage();
 
-// Middleware
-app.use(cors());
+// Middleware. credentials:true + reflected origin lets a statically hosted
+// frontend on another domain carry the session cookie to this API.
+app.use(cors({ origin: true, credentials: true }));
 // Stripe webhook needs the raw bytes for signature verification, so it is
 // mounted before the JSON body parser.
 app.post('/api/billing/webhook', express.raw({ type: 'application/json' }), handleStripeWebhook);
@@ -678,6 +680,7 @@ app.get('/api/search', async (req: Request, res: Response) => {
 
 app.use('/api/auth', authRouter());
 app.use('/api/keys', apiKeysRouter());
+app.use('/api/saves', savesRouter());
 app.use('/api/alerts', alertsRouter());
 app.use('/api/billing', billingRouter());
 app.use(seoRouter(storage));

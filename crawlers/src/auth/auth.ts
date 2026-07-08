@@ -13,6 +13,8 @@ export interface AuthedUser {
   id: string;
   email: string;
   plan: Plan;
+  name?: string | null;
+  createdAt?: string;
 }
 
 // Express request augmented by attachUser middleware
@@ -88,8 +90,9 @@ export function attachUser() {
       const session = verifySession(parseCookies(req.headers.cookie)[SESSION_COOKIE]);
       if (session && appDbAvailable()) {
         // Re-read plan so upgrades/downgrades apply without re-login
-        const result = await getAppDb().query('SELECT id, email, plan FROM users WHERE id = $1', [session.userId]);
-        if (result.rows[0]) req.user = result.rows[0];
+        const result = await getAppDb().query(
+          'SELECT id, email, plan, name, created_at FROM users WHERE id = $1', [session.userId]);
+        if (result.rows[0]) req.user = toAuthedUser(result.rows[0]);
       }
     } catch (error) {
       logger.warn(`[auth] attachUser failed: ${error instanceof Error ? error.message : error}`);
@@ -124,11 +127,27 @@ export function requirePlan(...plans: Plan[]) {
 
 // ---------- routes ----------
 
+function toAuthedUser(row: { id: string; email: string; plan: Plan; name?: string | null; created_at?: Date }): AuthedUser {
+  return {
+    id: row.id,
+    email: row.email,
+    plan: row.plan,
+    name: row.name ?? null,
+    createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : undefined
+  };
+}
+
+// In production the cookie is SameSite=None so a statically hosted frontend
+// on another origin (e.g. neuly.com -> neuly-web.onrender.com) can hold a
+// session; None requires Secure, which requires HTTPS — fine on Render.
+function cookieAttributes(): string {
+  return process.env.NODE_ENV === 'production' ? 'SameSite=None; Secure' : 'SameSite=Lax';
+}
+
 function setSessionCookie(res: Response, user: AuthedUser): void {
   const token = signSession({ userId: user.id, email: user.email, plan: user.plan });
-  const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
   res.setHeader('Set-Cookie',
-    `${SESSION_COOKIE}=${encodeURIComponent(token)}; HttpOnly; Path=/; Max-Age=${30 * 24 * 60 * 60}; SameSite=Lax${secure}`);
+    `${SESSION_COOKIE}=${encodeURIComponent(token)}; HttpOnly; Path=/; Max-Age=${30 * 24 * 60 * 60}; ${cookieAttributes()}`);
 }
 
 export function authRouter(): Router {
@@ -155,11 +174,15 @@ export function authRouter(): Router {
     try {
       const id = `usr_${randomUUID()}`;
       const passwordHash = await hashPassword(password);
-      await getAppDb().query(
-        'INSERT INTO users (id, email, password_hash, name) VALUES ($1, lower($2), $3, $4)',
-        [id, email, passwordHash, typeof name === 'string' ? name.slice(0, 200) : null]
+      const cleanName = typeof name === 'string' && name.trim() ? name.trim().slice(0, 200) : null;
+      const inserted = await getAppDb().query(
+        'INSERT INTO users (id, email, password_hash, name) VALUES ($1, lower($2), $3, $4) RETURNING created_at',
+        [id, email, passwordHash, cleanName]
       );
-      const user: AuthedUser = { id, email: email.toLowerCase(), plan: 'free' };
+      const user = toAuthedUser({
+        id, email: email.toLowerCase(), plan: 'free', name: cleanName,
+        created_at: inserted.rows[0]?.created_at
+      });
       setSessionCookie(res, user);
       res.status(201).json({ user });
     } catch (error) {
@@ -178,7 +201,7 @@ export function authRouter(): Router {
     }
 
     const result = await getAppDb().query(
-      'SELECT id, email, plan, password_hash FROM users WHERE email = lower($1)',
+      'SELECT id, email, plan, name, created_at, password_hash FROM users WHERE email = lower($1)',
       [email]
     );
     const row = result.rows[0];
@@ -186,13 +209,13 @@ export function authRouter(): Router {
       return res.status(401).json({ error: 'Invalid email or password' });
     }
 
-    const user: AuthedUser = { id: row.id, email: row.email, plan: row.plan };
+    const user = toAuthedUser(row);
     setSessionCookie(res, user);
     res.json({ user });
   });
 
   router.post('/logout', (_req: Request, res: Response) => {
-    res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; HttpOnly; Path=/; Max-Age=0`);
+    res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; HttpOnly; Path=/; Max-Age=0; ${cookieAttributes()}`);
     res.json({ ok: true });
   });
 

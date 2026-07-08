@@ -147,6 +147,20 @@ CREATE TABLE IF NOT EXISTS alert_subscriptions (
   last_notified_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Per-user saved/followed entities — powers the Save/Follow buttons and the
+-- dashboard "Saved Items" panel.
+CREATE TABLE IF NOT EXISTS saved_items (
+  id           TEXT PRIMARY KEY,
+  user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  entity_type  TEXT NOT NULL,
+  entity_id    TEXT NOT NULL,
+  entity_title TEXT NOT NULL,
+  kind         TEXT NOT NULL DEFAULT 'save' CHECK (kind IN ('save', 'follow')),
+  meta         JSONB,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (user_id, entity_type, entity_id, kind)
+);
+
 CREATE TABLE IF NOT EXISTS newsletter_issues (
   id           TEXT PRIMARY KEY,
   subject      TEXT NOT NULL,
@@ -159,6 +173,7 @@ CREATE TABLE IF NOT EXISTS newsletter_issues (
 
 CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys (user_id);
 CREATE INDEX IF NOT EXISTS idx_alerts_user ON alert_subscriptions (user_id);
+CREATE INDEX IF NOT EXISTS idx_saved_items_user ON saved_items (user_id, created_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_trials_data ON clinical_trials USING gin (data);
 CREATE INDEX IF NOT EXISTS idx_papers_data ON research_papers USING gin (data);
