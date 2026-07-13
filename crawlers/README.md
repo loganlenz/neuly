@@ -23,6 +23,7 @@ Data collection system for the Neuly psychedelic medicine research platform. Thi
 ## Product surface
 
 - **Accounts & plans** - signup/login with session cookies (`/api/auth/*`); free / pro / enterprise plans
+- **Saved items** - per-user save/follow of any entity (`/api/saves`), shown on the dashboard and the saved/following tabs
 - **Plan gating** - free sees 7 days of change history and a 90-day readout horizon; Pro+ gets full history, full horizon, and CSV export (`/api/export/:type`); Enterprise gets API keys (`/api/keys`, `Authorization: Bearer nk_...`)
 - **Alerts** - saved subscriptions (`/api/alerts`, entity type + keyword) matched daily against the change log and emailed
 - **Newsletter** - auto-generated weekly digest (changes by section + upcoming readouts), archived in `newsletter_issues` and sent to opted-in users

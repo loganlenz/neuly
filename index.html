@@ -155,11 +155,13 @@
       : window.location.protocol === 'file:' ? 'http://localhost:3001/api' : '/api';
     console.log('Neuly API base:', API_BASE_URL);
 
-    // API Helper Functions
+    // API Helper Functions. credentials: 'include' carries the session
+    // cookie so accounts work even when the frontend is hosted on a
+    // different origin than the API.
     const api = {
       async get(endpoint) {
         try {
-          const response = await fetch(`${API_BASE_URL}${endpoint}`);
+          const response = await fetch(`${API_BASE_URL}${endpoint}`, { credentials: 'include' });
           if (!response.ok) throw new Error('API request failed');
           return await response.json();
         } catch (error) {
@@ -167,6 +169,22 @@
           return null;
         }
       },
+
+      // Mutating requests throw with the server's error message so forms
+      // (signup/login, save buttons) can surface it to the user.
+      async send(method, endpoint, body) {
+        const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+          method,
+          credentials: 'include',
+          headers: body ? { 'Content-Type': 'application/json' } : undefined,
+          body: body ? JSON.stringify(body) : undefined
+        });
+        const data = await response.json().catch(() => null);
+        if (!response.ok) throw new Error((data && data.error) || `Request failed (${response.status})`);
+        return data;
+      },
+      post(endpoint, body) { return this.send('POST', endpoint, body); },
+      del(endpoint) { return this.send('DELETE', endpoint); },
 
       async getDashboard() {
         return this.get('/dashboard');
@@ -294,6 +312,133 @@
     };
 
     const useApiData = () => useContext(DataContext);
+
+    // ============================================================
+    // Accounts — real signup/login against /api/auth/* with session cookies
+    // ============================================================
+    const displayName = (user) => (user && (user.name || (user.email || '').split('@')[0])) || 'there';
+    const initialOf = (user) => (displayName(user)[0] || 'N').toUpperCase();
+
+    const authInputStyle = { width: '100%', padding: '14px 18px', fontSize: '15px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', color: '#fff', outline: 'none', fontFamily: '"DM Sans", sans-serif' };
+
+    const AuthModal = ({ mode, setMode, onClose, onAuthed }) => {
+      const [name, setName] = useState('');
+      const [email, setEmail] = useState('');
+      const [password, setPassword] = useState('');
+      const [error, setError] = useState(null);
+      const [busy, setBusy] = useState(false);
+      const isSignup = mode === 'signup';
+
+      const submit = async (e) => {
+        e.preventDefault();
+        if (busy) return;
+        setBusy(true);
+        setError(null);
+        try {
+          const res = isSignup
+            ? await api.post('/auth/signup', { name, email, password })
+            : await api.post('/auth/login', { email, password });
+          onAuthed(res.user);
+        } catch (err) {
+          setError(err.message === 'Failed to fetch' ? 'Could not reach the Neuly API — try again in a moment.' : err.message);
+          setBusy(false);
+        }
+      };
+
+      return (
+        <div onClick={onClose} style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 300, padding: '24px' }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ background: 'linear-gradient(180deg, #1a1f1d 0%, #141918 100%)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '24px', padding: '32px', width: '420px', maxWidth: '100%', animation: 'slideUp 0.25s' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+              <NeulyLogo height={20} />
+              <button onClick={onClose} style={{ background: 'transparent', border: 'none', color: '#6b7370', fontSize: '24px', cursor: 'pointer', lineHeight: 1 }}>×</button>
+            </div>
+            <h2 style={{ fontFamily: '"Fraunces", serif', fontSize: '26px', fontWeight: 600, color: '#fff', margin: '16px 0 6px' }}>{isSignup ? 'Create your free account' : 'Welcome back'}</h2>
+            <p style={{ fontSize: '14px', color: '#6b7370', marginBottom: '24px' }}>{isSignup ? 'Track studies, save companies, and get research alerts.' : 'Log in to your Neuly account.'}</p>
+            <form onSubmit={submit}>
+              {isSignup && (
+                <div style={{ marginBottom: '14px' }}>
+                  <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name" autoComplete="name" style={authInputStyle} />
+                </div>
+              )}
+              <div style={{ marginBottom: '14px' }}>
+                <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" autoComplete="email" style={authInputStyle} />
+              </div>
+              <div style={{ marginBottom: '18px' }}>
+                <input type="password" required minLength={8} value={password} onChange={(e) => setPassword(e.target.value)} placeholder={isSignup ? 'Password (8+ characters)' : 'Password'} autoComplete={isSignup ? 'new-password' : 'current-password'} style={authInputStyle} />
+              </div>
+              {error && (
+                <div style={{ marginBottom: '18px', padding: '12px 16px', fontSize: '13px', color: '#e57373', background: 'rgba(229,115,115,0.1)', border: '1px solid rgba(229,115,115,0.3)', borderRadius: '10px' }}>{error}</div>
+              )}
+              <button type="submit" disabled={busy} style={{ ...sharedStyles.button, width: '100%', padding: '15px', opacity: busy ? 0.6 : 1 }}>
+                {busy ? 'One moment…' : isSignup ? 'Create Free Account' : 'Log In'}
+              </button>
+            </form>
+            <p style={{ fontSize: '13px', color: '#6b7370', textAlign: 'center', marginTop: '20px' }}>
+              {isSignup ? 'Already have an account? ' : "Don't have an account? "}
+              <span onClick={() => { setError(null); setMode(isSignup ? 'login' : 'signup'); }} style={{ color: '#7dd3c0', cursor: 'pointer', fontWeight: 500 }}>{isSignup ? 'Log in' : 'Sign up free'}</span>
+            </p>
+          </div>
+        </div>
+      );
+    };
+
+    // ============================================================
+    // Saved / followed items — persisted per-user via /api/saves
+    // ============================================================
+    const SavesContext = createContext({ items: [], toggle: () => {}, find: () => null, remove: () => {} });
+    const useSaves = () => useContext(SavesContext);
+
+    const SavesProvider = ({ user, requireAuth, children }) => {
+      const [items, setItems] = useState([]);
+
+      useEffect(() => {
+        let cancelled = false;
+        if (!user) { setItems([]); return; }
+        api.get('/saves').then(res => { if (!cancelled && res && res.data) setItems(res.data); });
+        return () => { cancelled = true; };
+      }, [user && user.id]);
+
+      const find = (entityType, entityId, kind = 'save') =>
+        items.find(s => s.entityType === entityType && s.entityId === String(entityId) && s.kind === kind) || null;
+
+      const toggle = async (entity, kind = 'save') => {
+        if (!user) { requireAuth('signup'); return; }
+        const existing = find(entity.entityType, entity.entityId, kind);
+        try {
+          if (existing) {
+            setItems(prev => prev.filter(s => s.id !== existing.id));
+            await api.del(`/saves/${existing.id}`);
+          } else {
+            const res = await api.post('/saves', { ...entity, entityId: String(entity.entityId), kind });
+            setItems(prev => [res.data, ...prev.filter(s => s.id !== res.data.id)]);
+          }
+        } catch (err) {
+          console.error('Save failed', err);
+          const fresh = await api.get('/saves');
+          if (fresh && fresh.data) setItems(fresh.data);
+        }
+      };
+
+      const remove = async (id) => {
+        setItems(prev => prev.filter(s => s.id !== id));
+        try { await api.del(`/saves/${id}`); } catch (err) { console.error('Remove failed', err); }
+      };
+
+      return React.createElement(SavesContext.Provider, { value: { items, toggle, find, remove } }, children);
+    };
+
+    // One button for every Save/Follow surface: outline when inactive,
+    // filled when active. Signed-out clicks open the signup modal.
+    const SaveButton = ({ entityType, entityId, entityTitle, kind = 'save', style }) => {
+      const { toggle, find } = useSaves();
+      const active = Boolean(find(entityType, entityId, kind));
+      const label = kind === 'follow' ? (active ? 'Following' : 'Follow') : (active ? 'Saved ✓' : 'Save');
+      return (
+        <button onClick={() => toggle({ entityType, entityId, entityTitle }, kind)} style={{ ...(active ? sharedStyles.button : sharedStyles.buttonOutline), ...style }}>
+          {label}
+        </button>
+      );
+    };
 
     // Neuly brand mark (cloud icon only). The wordmark is real HTML text so it
     // always sits on the same baseline as neighboring text at any size.
@@ -450,7 +595,7 @@
         phase: t.phase || 'N/A',
         status,
         location,
-        enrollment: t.enrollment || '—',
+        enrollment: typeof t.enrollment === 'number' ? t.enrollment : null,
         nctId: t.nctId,
         url: t.url
       };
@@ -523,7 +668,7 @@
       ['education', 'My Courses', '🎓']
     ];
 
-    const MobileTabBar = ({ user, setUser, currentPage, setCurrentPage }) => {
+    const MobileTabBar = ({ user, signOut, currentPage, setCurrentPage }) => {
       const [sheetOpen, setSheetOpen] = useState(false);
       const morePages = MOBILE_MORE_ITEMS.map(([page]) => page);
       const moreActive = sheetOpen || morePages.includes(currentPage);
@@ -544,7 +689,7 @@
                   </button>
                 ))}
                 <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', margin: '8px 0' }} />
-                <button className="neuly-sheet-item danger" onClick={() => { setUser(null); setCurrentPage('home'); setSheetOpen(false); }}>
+                <button className="neuly-sheet-item danger" onClick={() => { signOut(); setSheetOpen(false); }}>
                   <span className="icon">🚪</span>Sign Out
                 </button>
               </div>
@@ -564,7 +709,7 @@
       );
     };
 
-    const Navigation = ({ user, setUser, currentPage, setCurrentPage }) => {
+    const Navigation = ({ user, openAuth, signOut, currentPage, setCurrentPage }) => {
       const [scrolled, setScrolled] = useState(false);
       const [menuOpen, setMenuOpen] = useState(false);
       const isMobile = useIsMobile();
@@ -586,9 +731,9 @@
           <>
             <nav style={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 100, padding: 'calc(10px + env(safe-area-inset-top)) 20px 10px', backgroundColor: 'rgba(10, 15, 13, 0.95)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)', borderBottom: '1px solid rgba(255,255,255,0.06)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <NeulyLogo height={20} onClick={() => setCurrentPage('dashboard')} />
-              <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'linear-gradient(135deg, #7dd3c0 0%, #a8c5e2 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '14px', fontWeight: 600, color: '#0a0f0d' }}>{user.name.charAt(0)}</div>
+              <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'linear-gradient(135deg, #7dd3c0 0%, #a8c5e2 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '14px', fontWeight: 600, color: '#0a0f0d' }}>{initialOf(user)}</div>
             </nav>
-            <MobileTabBar user={user} setUser={setUser} currentPage={currentPage} setCurrentPage={setCurrentPage} />
+            <MobileTabBar user={user} signOut={signOut} currentPage={currentPage} setCurrentPage={setCurrentPage} />
           </>
         );
       }
@@ -599,8 +744,8 @@
           <nav style={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 100, padding: 'calc(10px + env(safe-area-inset-top)) 20px 10px', backgroundColor: scrolled ? 'rgba(10, 15, 13, 0.95)' : 'transparent', backdropFilter: scrolled ? 'blur(20px)' : 'none', WebkitBackdropFilter: scrolled ? 'blur(20px)' : 'none', transition: 'all 0.3s', borderBottom: scrolled ? '1px solid rgba(255,255,255,0.06)' : 'none', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <NeulyLogo height={20} onClick={() => setCurrentPage('home')} />
             <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-              <button onClick={() => setUser({ name: 'Logan', email: 'logan@example.com' })} style={{ background: 'transparent', border: 'none', color: '#e8ebe9', fontSize: '14px', fontWeight: 500, cursor: 'pointer', padding: '10px 12px' }}>Log In</button>
-              <button onClick={() => { setUser({ name: 'Logan', email: 'logan@example.com' }); setCurrentPage('dashboard'); }} style={{ background: '#7dd3c0', border: 'none', color: '#0a0f0d', fontSize: '14px', fontWeight: 600, padding: '10px 18px', borderRadius: '10px', cursor: 'pointer' }}>Join Free</button>
+              <button onClick={() => openAuth('login')} style={{ background: 'transparent', border: 'none', color: '#e8ebe9', fontSize: '14px', fontWeight: 500, cursor: 'pointer', padding: '10px 12px' }}>Log In</button>
+              <button onClick={() => openAuth('signup')} style={{ background: '#7dd3c0', border: 'none', color: '#0a0f0d', fontSize: '14px', fontWeight: 600, padding: '10px 18px', borderRadius: '10px', cursor: 'pointer' }}>Join Free</button>
             </div>
           </nav>
         );
@@ -619,8 +764,8 @@
               {user ? (
                 <div style={{ position: 'relative' }}>
                   <div onClick={() => setMenuOpen(!menuOpen)} style={{ display: 'flex', alignItems: 'center', gap: '12px', cursor: 'pointer', padding: '8px 16px', borderRadius: '12px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)' }}>
-                    <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'linear-gradient(135deg, #7dd3c0 0%, #a8c5e2 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '14px', fontWeight: 600, color: '#0a0f0d' }}>{user.name.charAt(0)}</div>
-                    <span style={{ color: '#fff', fontSize: '14px', fontWeight: 500 }}>{user.name.split(' ')[0]}</span>
+                    <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'linear-gradient(135deg, #7dd3c0 0%, #a8c5e2 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '14px', fontWeight: 600, color: '#0a0f0d' }}>{initialOf(user)}</div>
+                    <span style={{ color: '#fff', fontSize: '14px', fontWeight: 500 }}>{displayName(user).split(' ')[0]}</span>
                   </div>
                   {menuOpen && (
                     <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: '8px', width: '220px', background: 'rgba(20,25,23,0.98)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', padding: '8px', animation: 'slideUp 0.2s' }}>
@@ -628,15 +773,15 @@
                         <div key={page} onClick={() => { setCurrentPage(page); setMenuOpen(false); }} style={{ padding: '10px 16px', borderRadius: '8px', cursor: 'pointer', fontSize: '14px', color: '#a0a8a4' }}>{label}</div>
                       ))}
                       <div style={{ borderTop: '1px solid rgba(255,255,255,0.06)', marginTop: '8px', paddingTop: '8px' }}>
-                        <div onClick={() => { setUser(null); setCurrentPage('home'); setMenuOpen(false); }} style={{ padding: '10px 16px', borderRadius: '8px', cursor: 'pointer', fontSize: '14px', color: '#e57373' }}>🚪 Sign Out</div>
+                        <div onClick={() => { signOut(); setMenuOpen(false); }} style={{ padding: '10px 16px', borderRadius: '8px', cursor: 'pointer', fontSize: '14px', color: '#e57373' }}>🚪 Sign Out</div>
                       </div>
                     </div>
                   )}
                 </div>
               ) : (
                 <>
-                  <button onClick={() => setUser({ name: 'Logan', email: 'logan@example.com' })} style={{ background: 'transparent', border: 'none', color: '#e8ebe9', fontSize: '14px', fontWeight: 500, cursor: 'pointer', padding: '10px 16px' }}>Log In</button>
-                  <button onClick={() => { setUser({ name: 'Logan', email: 'logan@example.com' }); setCurrentPage('dashboard'); }} style={{ background: '#7dd3c0', border: 'none', color: '#0a0f0d', fontSize: '14px', fontWeight: 600, padding: '10px 24px', borderRadius: '8px', cursor: 'pointer' }}>Join Free</button>
+                  <button onClick={() => openAuth('login')} style={{ background: 'transparent', border: 'none', color: '#e8ebe9', fontSize: '14px', fontWeight: 500, cursor: 'pointer', padding: '10px 16px' }}>Log In</button>
+                  <button onClick={() => openAuth('signup')} style={{ background: '#7dd3c0', border: 'none', color: '#0a0f0d', fontSize: '14px', fontWeight: 600, padding: '10px 24px', borderRadius: '8px', cursor: 'pointer' }}>Join Free</button>
                 </>
               )}
             </div>
@@ -709,7 +854,7 @@
     };
 
     // Hero Section
-    const HeroSection = ({ setCurrentPage, setUser }) => (
+    const HeroSection = ({ setCurrentPage, openAuth }) => (
       <section style={{ position: 'relative', zIndex: 1, minHeight: '100vh', display: 'flex', alignItems: 'center', padding: '120px 40px 80px', maxWidth: '1280px', margin: '0 auto' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '80px', width: '100%' }}>
           <div style={{ flex: 1, maxWidth: '600px' }}>
@@ -726,7 +871,7 @@
               The world's most comprehensive platform for plant medicine science. Access clinical studies, peer-reviewed research, educational courses, and connect with practitioners.
             </p>
             <div style={{ display: 'flex', gap: '16px', marginBottom: '56px', flexWrap: 'wrap' }}>
-              <button onClick={() => { setUser({ name: 'Logan', email: 'logan@example.com' }); setCurrentPage('dashboard'); }} style={sharedStyles.button}>Get Started Free</button>
+              <button onClick={() => openAuth('signup')} style={sharedStyles.button}>Get Started Free</button>
               <button onClick={() => setCurrentPage('research')} style={sharedStyles.buttonOutline}>Explore Research</button>
             </div>
             <HeroStats />
@@ -738,16 +883,28 @@
       </section>
     );
 
-    // Substances Section
+    // Substances Section — live per-substance study counts from /api/dashboard
     const SubstancesSection = () => {
-      const substances = [
-        { name: 'Psilocybin', count: 847, color: '#7dd3c0', desc: 'Mushroom-derived compound' },
-        { name: 'Ketamine', count: 623, color: '#a8c5e2', desc: 'FDA-approved therapy' },
-        { name: 'MDMA', count: 412, color: '#f0b775', desc: 'PTSD breakthrough therapy' },
-        { name: 'Ayahuasca', count: 156, color: '#d4a5c9', desc: 'Traditional plant brew' },
-        { name: 'Ibogaine', count: 89, color: '#98d4a0', desc: 'Addiction treatment' },
-        { name: 'Cannabis', count: 1240, color: '#e8c898', desc: 'Cannabinoid research' }
-      ];
+      const apiData = useApiData();
+      const substanceStats = apiData?.stats?.substanceStats || {};
+      const SUBSTANCE_DESCRIPTIONS = {
+        'Psilocybin': 'Mushroom-derived compound',
+        'Ketamine': 'FDA-approved therapy',
+        'MDMA': 'PTSD breakthrough therapy',
+        'LSD': 'Classic psychedelic research',
+        'Ayahuasca': 'Traditional plant brew',
+        'Ibogaine': 'Addiction treatment',
+        'Cannabis': 'Cannabinoid research',
+        'DMT': 'Short-acting psychedelic',
+        '5-MeO-DMT': 'Fast-acting tryptamine',
+        'Mescaline': 'Cactus-derived compound'
+      };
+      const substances = Object.entries(substanceStats)
+        .filter(([name, count]) => count > 0 && SUBSTANCE_DESCRIPTIONS[name])
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 6)
+        .map(([name, count]) => ({ name, count, color: subColor(name), desc: SUBSTANCE_DESCRIPTIONS[name] }));
+      if (substances.length === 0) return null;
       return (
         <section style={{ ...sectionTextures.substances, padding: '80px 0 100px' }}>
           <div style={{ ...sharedStyles.section, padding: '0 40px', maxWidth: '1280px', margin: '0 auto' }}>
@@ -776,7 +933,7 @@
     };
 
     // Homepage sections
-    const ResearchHomeSection = () => (
+    const ResearchHomeSection = ({ setCurrentPage }) => (
       <section style={{ ...sectionTextures.research, padding: '100px 0' }}>
         <div style={{ maxWidth: '1280px', margin: '0 auto', padding: '0 40px', textAlign: 'center' }}>
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
@@ -784,7 +941,7 @@
           </div>
           <h2 style={sharedStyles.sectionTitle}>Explore the Latest Research</h2>
           <p style={sharedStyles.sectionSubtitle}>Access peer-reviewed studies from leading journals worldwide.</p>
-          <button style={{ ...sharedStyles.buttonDark, background: '#5c6ac4', padding: '18px 40px' }}>Browse Research Data</button>
+          <button onClick={() => setCurrentPage('research')} style={{ ...sharedStyles.buttonDark, background: '#5c6ac4', padding: '18px 40px' }}>Browse Research Data</button>
         </div>
       </section>
     );
@@ -869,7 +1026,7 @@
       );
     };
 
-    const EducationHomeSection = () => (
+    const EducationHomeSection = ({ setCurrentPage }) => (
       <section style={{ background: '#f5f5f5', padding: '100px 0' }}>
         <div style={{ maxWidth: '1280px', margin: '0 auto', padding: '0 40px', textAlign: 'center' }}>
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
@@ -877,29 +1034,29 @@
           </div>
           <h2 style={{ ...sharedStyles.sectionTitle, color: '#1a1f1d' }}>Find Courses That Can Launch Your Career</h2>
           <p style={{ ...sharedStyles.sectionSubtitle, color: '#6b7370' }}>Therapists and practitioners are needed to lead the growth of plant medicine therapy.</p>
-          <button style={sharedStyles.buttonDark}>Browse All Courses</button>
+          <button onClick={() => setCurrentPage('education')} style={sharedStyles.buttonDark}>Browse All Courses</button>
         </div>
       </section>
     );
 
-    const CareHomeSection = () => (
+    const CareHomeSection = ({ setCurrentPage }) => (
       <section style={{ position: 'relative', padding: '140px 40px', textAlign: 'center', ...sectionTextures.care }}>
         <div style={{ maxWidth: '900px', margin: '0 auto' }}>
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', marginBottom: '24px' }}>
             <NeulyLogo height={36} suffix="care" />
           </div>
           <h2 style={{ fontFamily: '"Fraunces", serif', fontSize: '52px', fontWeight: 600, color: '#fff', marginBottom: '24px', lineHeight: 1.15 }}>Find Legal Plant Medicine Therapy</h2>
-          <button style={{ ...sharedStyles.buttonDark, background: '#5c6ac4', padding: '18px 40px' }}>Use Neuly Care</button>
+          <button onClick={() => setCurrentPage('care')} style={{ ...sharedStyles.buttonDark, background: '#5c6ac4', padding: '18px 40px' }}>Use Neuly Care</button>
         </div>
       </section>
     );
 
-    const FinalCTA = ({ setUser, setCurrentPage }) => (
+    const FinalCTA = ({ openAuth }) => (
       <section style={{ padding: '120px 40px', textAlign: 'center', position: 'relative', zIndex: 1, ...sectionTextures.finalCta }}>
         <div style={{ maxWidth: '700px', margin: '0 auto' }}>
           <h2 style={{ fontFamily: '"Fraunces", serif', fontSize: '48px', fontWeight: 600, color: '#fff', marginBottom: '16px' }}>Ready to explore?</h2>
-          <p style={{ fontSize: '18px', color: '#a0a8a4', marginBottom: '40px' }}>Join thousands advancing the science of natural medicine.</p>
-          <button onClick={() => { setUser({ name: 'Logan', email: 'logan@example.com' }); setCurrentPage('dashboard'); }} style={{ ...sharedStyles.button, padding: '20px 48px', fontSize: '16px' }}>Get Started Free</button>
+          <p style={{ fontSize: '18px', color: '#a0a8a4', marginBottom: '40px' }}>Join the community advancing the science of natural medicine.</p>
+          <button onClick={() => openAuth('signup')} style={{ ...sharedStyles.button, padding: '20px 48px', fontSize: '16px' }}>Get Started Free</button>
         </div>
       </section>
     );
@@ -907,27 +1064,36 @@
     // MAIN DASHBOARD PAGE
     const DashboardPage = ({ user, setCurrentPage }) => {
       const apiData = useApiData();
+      const { items: savedItems } = useSaves();
       const currentHour = new Date().getHours();
       const greeting = currentHour < 12 ? 'Good morning' : currentHour < 18 ? 'Good afternoon' : 'Good evening';
 
       // Use API stats if available
       const stats = apiData?.stats;
-      const usingApi = apiData?.usingApi || false;
 
-      const recentActivity = [
-        { type: 'course', action: 'Continued course', detail: 'Psilocybin-Assisted Therapy: Part 1', time: '2 hours ago', icon: '🎓', color: '#a8c5e2' },
-        { type: 'company', action: 'Viewed company', detail: 'COMPASS Pathways', time: '4 hours ago', icon: '🏢', color: '#7dd3c0' },
-        { type: 'study', action: 'Saved study', detail: 'MDMA-Assisted Therapy for PTSD', time: '5 hours ago', icon: '🧪', color: '#f0b775' },
-        { type: 'person', action: 'Followed', detail: 'Dr. Robin Carhart-Harris', time: '1 day ago', icon: '👤', color: '#d4a5c9' },
-        { type: 'research', action: 'Research query', detail: 'Psilocybin effects on depression', time: '1 day ago', icon: '🔬', color: '#7dd3c0' },
-      ];
+      // Latest database changes from the diff engine (/api/changes) — every
+      // entry is a real crawl-detected event, not demo content.
+      const [changes, setChanges] = useState(null);
+      useEffect(() => {
+        let cancelled = false;
+        api.get('/changes?limit=8').then(res => { if (!cancelled) setChanges((res && res.data) || []); });
+        return () => { cancelled = true; };
+      }, []);
 
-      const savedItems = [
-        { type: 'Study', name: 'Psilocybin for Treatment-Resistant Depression', status: 'Recruiting', color: '#7dd3c0' },
-        { type: 'Company', name: 'COMPASS Pathways', status: 'Public', color: '#a8c5e2' },
-        { type: 'Course', name: 'Psilocybin-Assisted Therapy: Part 1', progress: 75, color: '#f0b775' },
-        { type: 'Person', name: 'Rick Doblin, PhD', role: 'MAPS', color: '#d4a5c9' },
-      ];
+      const ENTITY_ICONS = { clinical_trials: '🧪', research_papers: '📄', companies: '🏢', people: '👤', jobs: '💼', events: '📅', legislation: '🏛️', funding_events: '💰', grants: '🎯', educational_resources: '🎓' };
+      const ENTITY_COLORS = { clinical_trials: '#f0b775', research_papers: '#a8c5e2', companies: '#7dd3c0', people: '#d4a5c9', jobs: '#98d4a0', events: '#e8c898', legislation: '#c084fc', funding_events: '#f0b775', grants: '#7dd3c0', educational_resources: '#a8c5e2' };
+      const CHANGE_LABELS = { added: 'New', updated: 'Updated', removed: 'Removed' };
+      const SAVE_TYPE_COLORS = { company: '#a8c5e2', person: '#d4a5c9', study: '#7dd3c0', trial: '#7dd3c0', course: '#f0b775' };
+
+      const memberSince = user.createdAt
+        ? new Date(user.createdAt).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+        : '—';
+      const weekRangeLabel = (() => {
+        const fmt = (d) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        const now = new Date();
+        const weekAgo = new Date(now.getTime() - 6 * 86400000);
+        return `${fmt(weekAgo)} - ${fmt(now)}`;
+      })();
 
       const quickActions = [
         { icon: '🔬', label: 'Research Agent', desc: 'AI-powered literature search', page: 'research', color: '#7dd3c0', gradient: 'linear-gradient(135deg, rgba(125,211,192,0.15) 0%, rgba(125,211,192,0.05) 100%)' },
@@ -936,7 +1102,6 @@
         { icon: '🧪', label: 'Clinical Studies', desc: 'Browse & enroll in studies', page: 'studies', color: '#f0b775', gradient: 'linear-gradient(135deg, rgba(240,183,117,0.15) 0%, rgba(240,183,117,0.05) 100%)' },
       ];
 
-      // Use API data for stats if available, otherwise use sample data
       const weeklyStats = [
         { label: 'Clinical Trials', value: stats?.counts?.clinicalTrials ?? '—', change: 'live', up: true },
         { label: 'Research Papers', value: stats?.counts?.researchPapers ?? '—', change: 'live', up: true },
@@ -949,15 +1114,15 @@
           <div style={{ padding: '40px', maxWidth: '1280px', margin: '0 auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '40px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
-                <div style={{ width: '80px', height: '80px', borderRadius: '50%', background: 'linear-gradient(135deg, #7dd3c0 0%, #a8c5e2 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '32px', fontWeight: 600, color: '#0a0f0d', boxShadow: '0 8px 32px rgba(125,211,192,0.3)' }}>{user.name.charAt(0)}</div>
+                <div style={{ width: '80px', height: '80px', borderRadius: '50%', background: 'linear-gradient(135deg, #7dd3c0 0%, #a8c5e2 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '32px', fontWeight: 600, color: '#0a0f0d', boxShadow: '0 8px 32px rgba(125,211,192,0.3)' }}>{initialOf(user)}</div>
                 <div>
-                  <h1 style={{ fontFamily: '"Fraunces", serif', fontSize: '36px', fontWeight: 600, color: '#fff', marginBottom: '8px' }}>{greeting}, {user.name}</h1>
+                  <h1 style={{ fontFamily: '"Fraunces", serif', fontSize: '36px', fontWeight: 600, color: '#fff', marginBottom: '8px' }}>{greeting}, {displayName(user)}</h1>
                   <p style={{ fontSize: '16px', color: '#6b7370' }}>Welcome to your personalized natural medicine research hub</p>
                 </div>
               </div>
               <div style={{ textAlign: 'right' }}>
                 <div style={{ fontSize: '14px', color: '#6b7370', marginBottom: '4px' }}>Member since</div>
-                <div style={{ fontSize: '16px', color: '#a0a8a4', fontWeight: 500 }}>November 2024</div>
+                <div style={{ fontSize: '16px', color: '#a0a8a4', fontWeight: 500 }}>{memberSince}</div>
               </div>
             </div>
 
@@ -981,7 +1146,7 @@
               <div style={{ ...sharedStyles.card }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
                   <h2 style={{ fontSize: '18px', fontWeight: 600, color: '#fff' }}>This Week</h2>
-                  <span style={{ fontSize: '13px', color: '#6b7370' }}>Dec 1 - Dec 7</span>
+                  <span style={{ fontSize: '13px', color: '#6b7370' }}>{weekRangeLabel}</span>
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
                   {weeklyStats.map((stat, i) => (
@@ -1020,20 +1185,26 @@
             <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.8fr', gap: '24px' }}>
               <div style={{ ...sharedStyles.card }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-                  <h2 style={{ fontSize: '18px', fontWeight: 600, color: '#fff' }}>Recent Activity</h2>
-                  <button style={{ background: 'transparent', border: 'none', color: '#7dd3c0', fontSize: '14px', cursor: 'pointer' }}>View All →</button>
+                  <h2 style={{ fontSize: '18px', fontWeight: 600, color: '#fff' }}>Latest Database Updates</h2>
+                  <span style={{ fontSize: '13px', color: '#6b7370' }}>from the crawlers</span>
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                  {recentActivity.map((item, i) => (
-                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '16px', padding: '16px', borderRadius: '12px', background: i === 0 ? 'rgba(125,211,192,0.05)' : 'transparent', transition: 'background 0.2s' }}>
-                      <div style={{ width: '44px', height: '44px', borderRadius: '12px', background: `${item.color}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px' }}>{item.icon}</div>
-                      <div style={{ flex: 1 }}>
+                  {changes === null && (
+                    <p style={{ fontSize: '14px', color: '#6b7370', padding: '16px' }}>Loading updates…</p>
+                  )}
+                  {changes && changes.length === 0 && (
+                    <p style={{ fontSize: '14px', color: '#6b7370', padding: '16px' }}>No changes detected in the last 7 days. Updates appear here after each crawl.</p>
+                  )}
+                  {(changes || []).map((item, i) => (
+                    <div key={item.id || i} style={{ display: 'flex', alignItems: 'center', gap: '16px', padding: '16px', borderRadius: '12px', background: i === 0 ? 'rgba(125,211,192,0.05)' : 'transparent', transition: 'background 0.2s' }}>
+                      <div style={{ width: '44px', height: '44px', borderRadius: '12px', background: `${ENTITY_COLORS[item.entityType] || '#7dd3c0'}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px', flexShrink: 0 }}>{ENTITY_ICONS[item.entityType] || '🔔'}</div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-                          <span style={{ fontSize: '14px', color: item.color, fontWeight: 500 }}>{item.action}</span>
+                          <span style={{ fontSize: '14px', color: ENTITY_COLORS[item.entityType] || '#7dd3c0', fontWeight: 500 }}>{CHANGE_LABELS[item.changeType] || 'Change'} · {(item.entityType || '').replace(/_/g, ' ')}</span>
                         </div>
-                        <p style={{ fontSize: '14px', color: '#a0a8a4' }}>{item.detail}</p>
+                        <p style={{ fontSize: '14px', color: '#a0a8a4', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.entityTitle || item.summary}</p>
                       </div>
-                      <span style={{ fontSize: '13px', color: '#4a524e' }}>{item.time}</span>
+                      <span style={{ fontSize: '13px', color: '#4a524e', flexShrink: 0 }}>{timeAgo(item.detectedAt)}</span>
                     </div>
                   ))}
                 </div>
@@ -1042,23 +1213,23 @@
               <div style={{ ...sharedStyles.card }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
                   <h2 style={{ fontSize: '18px', fontWeight: 600, color: '#fff' }}>Saved Items</h2>
-                  <span style={{ fontSize: '13px', color: '#6b7370' }}>{savedItems.length} items</span>
+                  <span style={{ fontSize: '13px', color: '#6b7370' }}>{savedItems.length} item{savedItems.length === 1 ? '' : 's'}</span>
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                  {savedItems.map((item, i) => (
-                    <div key={i} style={{ padding: '16px', background: 'rgba(255,255,255,0.02)', borderRadius: '12px', borderLeft: `3px solid ${item.color}` }}>
+                  {savedItems.length === 0 && (
+                    <div style={{ textAlign: 'center', padding: '32px 16px' }}>
+                      <div style={{ fontSize: '36px', marginBottom: '12px' }}>🔖</div>
+                      <p style={{ fontSize: '14px', color: '#6b7370', marginBottom: '16px' }}>Nothing saved yet. Save companies, people, and studies as you browse and they'll appear here.</p>
+                      <button onClick={() => setCurrentPage('companies')} style={{ ...sharedStyles.buttonOutline, padding: '10px 20px', fontSize: '13px' }}>Browse Companies</button>
+                    </div>
+                  )}
+                  {savedItems.slice(0, 6).map((item) => (
+                    <div key={item.id} style={{ padding: '16px', background: 'rgba(255,255,255,0.02)', borderRadius: '12px', borderLeft: `3px solid ${SAVE_TYPE_COLORS[item.entityType] || '#7dd3c0'}` }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
-                        <span style={{ fontSize: '11px', fontWeight: 600, color: item.color, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{item.type}</span>
-                        {item.status && <span style={{ fontSize: '11px', padding: '2px 8px', background: 'rgba(125,211,192,0.15)', color: '#7dd3c0', borderRadius: '4px' }}>{item.status}</span>}
-                        {item.progress && <span style={{ fontSize: '11px', color: '#7dd3c0' }}>{item.progress}%</span>}
+                        <span style={{ fontSize: '11px', fontWeight: 600, color: SAVE_TYPE_COLORS[item.entityType] || '#7dd3c0', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{item.kind === 'follow' ? `Following · ${item.entityType}` : item.entityType}</span>
+                        <span style={{ fontSize: '11px', color: '#4a524e' }}>{timeAgo(item.createdAt)}</span>
                       </div>
-                      <h4 style={{ fontSize: '14px', fontWeight: 500, color: '#fff', lineHeight: 1.4 }}>{item.name}</h4>
-                      {item.progress && (
-                        <div style={{ marginTop: '10px', height: '4px', background: 'rgba(255,255,255,0.1)', borderRadius: '2px', overflow: 'hidden' }}>
-                          <div style={{ width: `${item.progress}%`, height: '100%', background: 'linear-gradient(90deg, #7dd3c0, #a8c5e2)', borderRadius: '2px' }} />
-                        </div>
-                      )}
-                      {item.role && <span style={{ fontSize: '12px', color: '#6b7370', marginTop: '6px', display: 'block' }}>{item.role}</span>}
+                      <h4 style={{ fontSize: '14px', fontWeight: 500, color: '#fff', lineHeight: 1.4 }}>{item.entityTitle}</h4>
                     </div>
                   ))}
                 </div>
@@ -1076,16 +1247,17 @@
       const [selectedType, setSelectedType] = useState('All');
       const [selectedSubstance, setSelectedSubstance] = useState('All');
       const [searchQuery, setSearchQuery] = useState('');
-      const [showCompanyModal, setShowCompanyModal] = useState(null);
 
       const stages = ['All', 'Public', 'Series C+', 'Series A-B', 'Seed', 'Private', 'Non-Profit'];
       const types = ['All', 'Biotech', 'Healthcare', 'Technology', 'Research', 'Media', 'Services'];
       const substances = ['All', 'Psilocybin', 'MDMA', 'Ketamine', 'LSD', 'Ibogaine', 'Multiple'];
 
       const apiData = useApiData();
+      const { items: saves, remove: removeSave } = useSaves();
       const companies = (apiData?.companies || []).map(normalizeCompany);
-
-      const savedCompanies = companies.slice(0, 3);
+      const companyById = new Map(companies.map(c => [String(c.id), c]));
+      const savedCompanies = saves.filter(s => s.entityType === 'company' && s.kind === 'save');
+      const followedCompanies = saves.filter(s => s.entityType === 'company' && s.kind === 'follow');
 
       const filteredCompanies = companies.filter(c => 
         (selectedStage === 'All' || c.stage === selectedStage) &&
@@ -1179,7 +1351,7 @@
 
                       <div style={{ display: 'flex', gap: '10px', paddingTop: '16px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
                         <button onClick={() => viewCompanyProfile(company)} style={{ ...sharedStyles.button, flex: 1, padding: '10px 20px', fontSize: '14px' }}>View Profile</button>
-                        <button style={{ ...sharedStyles.buttonOutline, padding: '10px 20px', fontSize: '14px' }}>Save</button>
+                        <SaveButton entityType="company" entityId={company.id} entityTitle={company.name} style={{ padding: '10px 20px', fontSize: '14px' }} />
                       </div>
                     </div>
                   ))}
@@ -1188,78 +1360,61 @@
             )}
 
             {activeTab === 'saved' && (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(380px, 1fr))', gap: '24px' }}>
-                {savedCompanies.map(company => (
-                  <div key={company.id} style={{ ...sharedStyles.card, display: 'flex', alignItems: 'center', gap: '20px' }}>
-                    <div style={{ width: '56px', height: '56px', borderRadius: '14px', background: 'linear-gradient(135deg, rgba(125,211,192,0.15), rgba(168,197,226,0.15))', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '24px' }}>{company.logo}</div>
-                    <div style={{ flex: 1 }}>
-                      <h3 style={{ fontSize: '17px', fontWeight: 600, color: '#fff', marginBottom: '4px' }}>{company.name}</h3>
-                      <span style={{ fontSize: '13px', color: '#6b7370' }}>{company.type} • {company.stage}</span>
-                    </div>
-                    <button style={{ ...sharedStyles.buttonOutline, padding: '8px 16px', fontSize: '13px', color: '#e57373', borderColor: 'rgba(229,115,115,0.3)' }}>Remove</button>
-                  </div>
-                ))}
-              </div>
+              savedCompanies.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '80px 40px' }}>
+                  <div style={{ fontSize: '48px', marginBottom: '16px' }}>🔖</div>
+                  <h3 style={{ fontSize: '20px', fontWeight: 600, color: '#fff', marginBottom: '8px' }}>No saved companies</h3>
+                  <p style={{ fontSize: '15px', color: '#6b7370', marginBottom: '24px' }}>Save companies while browsing to find them again here</p>
+                  <button onClick={() => setActiveTab('browse')} style={sharedStyles.buttonOutline}>Browse Companies</button>
+                </div>
+              ) : (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(380px, 1fr))', gap: '24px' }}>
+                  {savedCompanies.map(item => {
+                    const company = companyById.get(String(item.entityId));
+                    return (
+                      <div key={item.id} style={{ ...sharedStyles.card, display: 'flex', alignItems: 'center', gap: '20px' }}>
+                        <div style={{ width: '56px', height: '56px', borderRadius: '14px', background: 'linear-gradient(135deg, rgba(125,211,192,0.15), rgba(168,197,226,0.15))', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '24px' }}>{pickEmoji(item.entityTitle, COMPANY_EMOJIS)}</div>
+                        <div style={{ flex: 1 }}>
+                          <h3 style={{ fontSize: '17px', fontWeight: 600, color: '#fff', marginBottom: '4px' }}>{item.entityTitle}</h3>
+                          <span style={{ fontSize: '13px', color: '#6b7370' }}>{company ? `${company.type} • ${company.stage}` : `Saved ${timeAgo(item.createdAt)}`}</span>
+                        </div>
+                        {company && <button onClick={() => viewCompanyProfile(company)} style={{ ...sharedStyles.buttonOutline, padding: '8px 16px', fontSize: '13px' }}>View</button>}
+                        <button onClick={() => removeSave(item.id)} style={{ ...sharedStyles.buttonOutline, padding: '8px 16px', fontSize: '13px', color: '#e57373', borderColor: 'rgba(229,115,115,0.3)' }}>Remove</button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )
             )}
 
             {activeTab === 'following' && (
-              <div style={{ textAlign: 'center', padding: '80px 40px' }}>
-                <div style={{ fontSize: '48px', marginBottom: '16px' }}>🔔</div>
-                <h3 style={{ fontSize: '20px', fontWeight: 600, color: '#fff', marginBottom: '8px' }}>Not following any companies</h3>
-                <p style={{ fontSize: '15px', color: '#6b7370', marginBottom: '24px' }}>Follow companies to get updates on news and announcements</p>
-                <button onClick={() => setActiveTab('browse')} style={sharedStyles.buttonOutline}>Browse Companies</button>
-              </div>
+              followedCompanies.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '80px 40px' }}>
+                  <div style={{ fontSize: '48px', marginBottom: '16px' }}>🔔</div>
+                  <h3 style={{ fontSize: '20px', fontWeight: 600, color: '#fff', marginBottom: '8px' }}>Not following any companies</h3>
+                  <p style={{ fontSize: '15px', color: '#6b7370', marginBottom: '24px' }}>Follow companies to get updates on news and announcements</p>
+                  <button onClick={() => setActiveTab('browse')} style={sharedStyles.buttonOutline}>Browse Companies</button>
+                </div>
+              ) : (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(380px, 1fr))', gap: '24px' }}>
+                  {followedCompanies.map(item => {
+                    const company = companyById.get(String(item.entityId));
+                    return (
+                      <div key={item.id} style={{ ...sharedStyles.card, display: 'flex', alignItems: 'center', gap: '20px' }}>
+                        <div style={{ width: '56px', height: '56px', borderRadius: '14px', background: 'linear-gradient(135deg, rgba(125,211,192,0.15), rgba(168,197,226,0.15))', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '24px' }}>{pickEmoji(item.entityTitle, COMPANY_EMOJIS)}</div>
+                        <div style={{ flex: 1 }}>
+                          <h3 style={{ fontSize: '17px', fontWeight: 600, color: '#fff', marginBottom: '4px' }}>{item.entityTitle}</h3>
+                          <span style={{ fontSize: '13px', color: '#6b7370' }}>{company ? `${company.type} • ${company.stage}` : `Following since ${timeAgo(item.createdAt)}`}</span>
+                        </div>
+                        {company && <button onClick={() => viewCompanyProfile(company)} style={{ ...sharedStyles.buttonOutline, padding: '8px 16px', fontSize: '13px' }}>View</button>}
+                        <button onClick={() => removeSave(item.id)} style={{ ...sharedStyles.buttonOutline, padding: '8px 16px', fontSize: '13px', color: '#e57373', borderColor: 'rgba(229,115,115,0.3)' }}>Unfollow</button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )
             )}
           </div>
-
-          {showCompanyModal && (
-            <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200, padding: '40px', overflowY: 'auto' }}>
-              <div style={{ background: 'linear-gradient(180deg, #1a1f1d 0%, #141918 100%)', borderRadius: '24px', padding: '32px', width: '700px', maxWidth: '100%', maxHeight: '90vh', overflowY: 'auto', animation: 'slideUp 0.3s' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '24px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
-                    <div style={{ width: '72px', height: '72px', borderRadius: '18px', background: 'linear-gradient(135deg, rgba(125,211,192,0.2), rgba(168,197,226,0.2))', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '36px' }}>{showCompanyModal.logo}</div>
-                    <div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px' }}>
-                        <h2 style={{ fontFamily: '"Fraunces", serif', fontSize: '28px', fontWeight: 600, color: '#fff' }}>{showCompanyModal.name}</h2>
-                        {showCompanyModal.ticker && <span style={{ padding: '4px 10px', fontSize: '13px', fontWeight: 600, background: 'rgba(125,211,192,0.15)', color: '#7dd3c0', borderRadius: '6px' }}>${showCompanyModal.ticker}</span>}
-                      </div>
-                      <div style={{ fontSize: '15px', color: '#a0a8a4' }}>{showCompanyModal.type} • {showCompanyModal.stage}</div>
-                    </div>
-                  </div>
-                  <button onClick={() => setShowCompanyModal(null)} style={{ background: 'transparent', border: 'none', color: '#6b7370', fontSize: '24px', cursor: 'pointer' }}>×</button>
-                </div>
-
-                <p style={{ fontSize: '15px', color: '#a0a8a4', lineHeight: 1.7, marginBottom: '24px' }}>{showCompanyModal.description}</p>
-
-                <div style={{ display: 'flex', gap: '8px', marginBottom: '24px' }}>
-                  {showCompanyModal.substances.map((sub, i) => (
-                    <span key={i} style={{ padding: '6px 14px', fontSize: '13px', fontWeight: 600, background: `${substanceColors[sub]}20`, color: substanceColors[sub], borderRadius: '6px' }}>{sub}</span>
-                  ))}
-                </div>
-
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '24px' }}>
-                  {[
-                    { label: 'Headquarters', value: showCompanyModal.hq },
-                    { label: 'Founded', value: showCompanyModal.founded },
-                    { label: 'Employees', value: showCompanyModal.employees },
-                    { label: 'Focus', value: showCompanyModal.focus },
-                    { label: 'Total Funding', value: showCompanyModal.funding },
-                    { label: 'Website', value: showCompanyModal.website }
-                  ].map((item, i) => (
-                    <div key={i} style={{ background: 'rgba(255,255,255,0.02)', borderRadius: '12px', padding: '16px' }}>
-                      <div style={{ fontSize: '12px', color: '#6b7370', marginBottom: '4px' }}>{item.label}</div>
-                      <div style={{ fontSize: '15px', color: '#e8ebe9', fontWeight: 500 }}>{item.value}</div>
-                    </div>
-                  ))}
-                </div>
-
-                <div style={{ display: 'flex', gap: '12px' }}>
-                  <button style={{ ...sharedStyles.button, flex: 1 }}>Follow Company</button>
-                  <button style={{ ...sharedStyles.buttonOutline, flex: 1 }}>Save</button>
-                </div>
-              </div>
-            </div>
-          )}
         </div>
       );
     };
@@ -1270,15 +1425,17 @@
       const [selectedRole, setSelectedRole] = useState('All');
       const [selectedOrg, setSelectedOrg] = useState('All');
       const [searchQuery, setSearchQuery] = useState('');
-      const [showPersonModal, setShowPersonModal] = useState(null);
 
       const roles = ['All', 'Researcher', 'Executive', 'Clinician', 'Investor', 'Advocate', 'Founder'];
-      const orgs = ['All', 'Johns Hopkins', 'COMPASS Pathways', 'MAPS', 'UCSF', 'Imperial College London', 'Atai Life Sciences', 'NYU Langone', 'UC Davis', 'Usona Institute', 'Mount Sinai'];
 
       const apiData = useApiData();
+      const { items: saves, remove: removeSave } = useSaves();
       const people = (apiData?.people || []).map(normalizePerson);
-
-      const savedPeople = people.slice(0, 3);
+      const personById = new Map(people.map(p => [String(p.id), p]));
+      const savedPeople = saves.filter(s => s.entityType === 'person' && s.kind === 'save');
+      const followedPeople = saves.filter(s => s.entityType === 'person' && s.kind === 'follow');
+      // Organization filter options come from the live data
+      const orgs = ['All', ...Array.from(new Set(people.map(p => p.org).filter(o => o && o !== '—'))).sort()];
 
       const filteredPeople = people.filter(p => 
         (selectedRole === 'All' || p.role === selectedRole) &&
@@ -1362,7 +1519,7 @@
 
                       <div style={{ display: 'flex', gap: '10px', paddingTop: '16px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
                         <button onClick={() => viewPersonProfile(person)} style={{ ...sharedStyles.button, flex: 1, padding: '10px 20px', fontSize: '14px' }}>View Profile</button>
-                        <button style={{ ...sharedStyles.buttonOutline, padding: '10px 20px', fontSize: '14px' }}>Follow</button>
+                        <SaveButton entityType="person" entityId={person.id} entityTitle={person.name} kind="follow" style={{ padding: '10px 20px', fontSize: '14px' }} />
                       </div>
                     </div>
                   ))}
@@ -1371,76 +1528,61 @@
             )}
 
             {activeTab === 'saved' && (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(380px, 1fr))', gap: '24px' }}>
-                {savedPeople.map(person => (
-                  <div key={person.id} style={{ ...sharedStyles.card, display: 'flex', alignItems: 'center', gap: '20px' }}>
-                    <div style={{ width: '56px', height: '56px', borderRadius: '50%', background: 'linear-gradient(135deg, rgba(125,211,192,0.2), rgba(168,197,226,0.2))', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '24px' }}>{person.image}</div>
-                    <div style={{ flex: 1 }}>
-                      <h3 style={{ fontSize: '17px', fontWeight: 600, color: '#fff', marginBottom: '4px' }}>{person.name}</h3>
-                      <span style={{ fontSize: '13px', color: '#6b7370' }}>{person.role} • {person.org}</span>
-                    </div>
-                    <button style={{ ...sharedStyles.buttonOutline, padding: '8px 16px', fontSize: '13px', color: '#e57373', borderColor: 'rgba(229,115,115,0.3)' }}>Remove</button>
-                  </div>
-                ))}
-              </div>
+              savedPeople.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '80px 40px' }}>
+                  <div style={{ fontSize: '48px', marginBottom: '16px' }}>🔖</div>
+                  <h3 style={{ fontSize: '20px', fontWeight: 600, color: '#fff', marginBottom: '8px' }}>No saved people</h3>
+                  <p style={{ fontSize: '15px', color: '#6b7370', marginBottom: '24px' }}>Save profiles while browsing to find them again here</p>
+                  <button onClick={() => setActiveTab('browse')} style={sharedStyles.buttonOutline}>Browse People</button>
+                </div>
+              ) : (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(380px, 1fr))', gap: '24px' }}>
+                  {savedPeople.map(item => {
+                    const person = personById.get(String(item.entityId));
+                    return (
+                      <div key={item.id} style={{ ...sharedStyles.card, display: 'flex', alignItems: 'center', gap: '20px' }}>
+                        <div style={{ width: '56px', height: '56px', borderRadius: '50%', background: 'linear-gradient(135deg, rgba(125,211,192,0.2), rgba(168,197,226,0.2))', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '24px' }}>{person ? person.image : '👤'}</div>
+                        <div style={{ flex: 1 }}>
+                          <h3 style={{ fontSize: '17px', fontWeight: 600, color: '#fff', marginBottom: '4px' }}>{item.entityTitle}</h3>
+                          <span style={{ fontSize: '13px', color: '#6b7370' }}>{person ? `${person.role} • ${person.org}` : `Saved ${timeAgo(item.createdAt)}`}</span>
+                        </div>
+                        {person && <button onClick={() => viewPersonProfile(person)} style={{ ...sharedStyles.buttonOutline, padding: '8px 16px', fontSize: '13px' }}>View</button>}
+                        <button onClick={() => removeSave(item.id)} style={{ ...sharedStyles.buttonOutline, padding: '8px 16px', fontSize: '13px', color: '#e57373', borderColor: 'rgba(229,115,115,0.3)' }}>Remove</button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )
             )}
 
             {activeTab === 'following' && (
-              <div style={{ textAlign: 'center', padding: '80px 40px' }}>
-                <div style={{ fontSize: '48px', marginBottom: '16px' }}>👥</div>
-                <h3 style={{ fontSize: '20px', fontWeight: 600, color: '#fff', marginBottom: '8px' }}>Not following anyone</h3>
-                <p style={{ fontSize: '15px', color: '#6b7370', marginBottom: '24px' }}>Follow people to get updates on their research and activities</p>
-                <button onClick={() => setActiveTab('browse')} style={sharedStyles.buttonOutline}>Browse People</button>
-              </div>
+              followedPeople.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '80px 40px' }}>
+                  <div style={{ fontSize: '48px', marginBottom: '16px' }}>👥</div>
+                  <h3 style={{ fontSize: '20px', fontWeight: 600, color: '#fff', marginBottom: '8px' }}>Not following anyone</h3>
+                  <p style={{ fontSize: '15px', color: '#6b7370', marginBottom: '24px' }}>Follow people to get updates on their research and activities</p>
+                  <button onClick={() => setActiveTab('browse')} style={sharedStyles.buttonOutline}>Browse People</button>
+                </div>
+              ) : (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(380px, 1fr))', gap: '24px' }}>
+                  {followedPeople.map(item => {
+                    const person = personById.get(String(item.entityId));
+                    return (
+                      <div key={item.id} style={{ ...sharedStyles.card, display: 'flex', alignItems: 'center', gap: '20px' }}>
+                        <div style={{ width: '56px', height: '56px', borderRadius: '50%', background: 'linear-gradient(135deg, rgba(125,211,192,0.2), rgba(168,197,226,0.2))', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '24px' }}>{person ? person.image : '👤'}</div>
+                        <div style={{ flex: 1 }}>
+                          <h3 style={{ fontSize: '17px', fontWeight: 600, color: '#fff', marginBottom: '4px' }}>{item.entityTitle}</h3>
+                          <span style={{ fontSize: '13px', color: '#6b7370' }}>{person ? `${person.role} • ${person.org}` : `Following since ${timeAgo(item.createdAt)}`}</span>
+                        </div>
+                        {person && <button onClick={() => viewPersonProfile(person)} style={{ ...sharedStyles.buttonOutline, padding: '8px 16px', fontSize: '13px' }}>View</button>}
+                        <button onClick={() => removeSave(item.id)} style={{ ...sharedStyles.buttonOutline, padding: '8px 16px', fontSize: '13px', color: '#e57373', borderColor: 'rgba(229,115,115,0.3)' }}>Unfollow</button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )
             )}
           </div>
-
-          {showPersonModal && (
-            <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200, padding: '40px', overflowY: 'auto' }}>
-              <div style={{ background: 'linear-gradient(180deg, #1a1f1d 0%, #141918 100%)', borderRadius: '24px', padding: '32px', width: '600px', maxWidth: '100%', maxHeight: '90vh', overflowY: 'auto', animation: 'slideUp 0.3s' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '24px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
-                    <div style={{ width: '80px', height: '80px', borderRadius: '50%', background: 'linear-gradient(135deg, rgba(125,211,192,0.2), rgba(168,197,226,0.2))', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '40px' }}>{showPersonModal.image}</div>
-                    <div>
-                      <h2 style={{ fontFamily: '"Fraunces", serif', fontSize: '26px', fontWeight: 600, color: '#fff', marginBottom: '6px' }}>{showPersonModal.name}</h2>
-                      <p style={{ fontSize: '15px', color: '#7dd3c0', marginBottom: '4px' }}>{showPersonModal.title}</p>
-                      <p style={{ fontSize: '14px', color: '#6b7370' }}>{showPersonModal.org}</p>
-                    </div>
-                  </div>
-                  <button onClick={() => setShowPersonModal(null)} style={{ background: 'transparent', border: 'none', color: '#6b7370', fontSize: '24px', cursor: 'pointer' }}>×</button>
-                </div>
-
-                <p style={{ fontSize: '15px', color: '#a0a8a4', lineHeight: 1.7, marginBottom: '24px' }}>{showPersonModal.bio}</p>
-
-                <div style={{ marginBottom: '24px' }}>
-                  <h4 style={{ fontSize: '14px', fontWeight: 600, color: '#6b7370', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Expertise</h4>
-                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                    {showPersonModal.expertise.map((exp, i) => (
-                      <span key={i} style={{ padding: '6px 14px', fontSize: '13px', background: 'rgba(125,211,192,0.1)', border: '1px solid rgba(125,211,192,0.3)', borderRadius: '6px', color: '#7dd3c0' }}>{exp}</span>
-                    ))}
-                  </div>
-                </div>
-
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', marginBottom: '24px' }}>
-                  {[
-                    { label: 'Location', value: showPersonModal.location },
-                    { label: 'Publications', value: showPersonModal.papers },
-                    { label: 'Citations', value: showPersonModal.citations }
-                  ].map((item, i) => (
-                    <div key={i} style={{ background: 'rgba(255,255,255,0.02)', borderRadius: '12px', padding: '16px', textAlign: 'center' }}>
-                      <div style={{ fontSize: '12px', color: '#6b7370', marginBottom: '4px' }}>{item.label}</div>
-                      <div style={{ fontSize: '18px', color: '#e8ebe9', fontWeight: 600 }}>{item.value}</div>
-                    </div>
-                  ))}
-                </div>
-
-                <div style={{ display: 'flex', gap: '12px' }}>
-                  <button style={{ ...sharedStyles.button, flex: 1 }}>Follow</button>
-                  <button style={{ ...sharedStyles.buttonOutline, flex: 1 }}>Save</button>
-                </div>
-              </div>
-            </div>
-          )}
         </div>
       );
     };
@@ -1488,8 +1630,8 @@
                 </div>
               </div>
               <div style={{ display: 'flex', gap: '12px' }}>
-                <button style={{ ...sharedStyles.button, padding: '14px 28px' }}>Follow</button>
-                <button style={{ ...sharedStyles.buttonOutline, padding: '14px 28px' }}>Save</button>
+                <SaveButton entityType="company" entityId={company.id} entityTitle={company.name} kind="follow" style={{ padding: '14px 28px' }} />
+                <SaveButton entityType="company" entityId={company.id} entityTitle={company.name} style={{ padding: '14px 28px' }} />
               </div>
             </div>
 
@@ -1559,7 +1701,9 @@
                       ].map((item, i) => (
                         <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingBottom: i < 3 ? '16px' : 0, borderBottom: i < 3 ? '1px solid rgba(255,255,255,0.06)' : 'none' }}>
                           <span style={{ fontSize: '14px', color: '#6b7370' }}>{item.label}</span>
-                          <span style={{ fontSize: '14px', color: item.link ? '#7dd3c0' : '#e8ebe9', fontWeight: 500 }}>{item.value}</span>
+                          {item.link && item.value && item.value !== '—'
+                            ? <a href={`https://${item.value}`} target="_blank" rel="noopener noreferrer" style={{ fontSize: '14px', color: '#7dd3c0', fontWeight: 500, textDecoration: 'none' }}>{item.value} ↗</a>
+                            : <span style={{ fontSize: '14px', color: '#e8ebe9', fontWeight: 500 }}>{item.value}</span>}
                         </div>
                       ))}
                     </div>
@@ -1652,7 +1796,7 @@
                             <span style={{ padding: '3px 8px', fontSize: '11px', fontWeight: 600, background: item.type === 'Clinical' ? 'rgba(125,211,192,0.1)' : item.type === 'Regulatory' ? 'rgba(212,165,201,0.1)' : 'rgba(240,183,117,0.1)', color: item.type === 'Clinical' ? '#7dd3c0' : item.type === 'Regulatory' ? '#d4a5c9' : '#f0b775', borderRadius: '4px' }}>{item.type}</span>
                           </div>
                         </div>
-                        <button style={{ background: 'transparent', border: 'none', color: '#7dd3c0', fontSize: '14px', cursor: 'pointer' }}>Read →</button>
+                        {item.url && <button onClick={() => window.open(item.url, '_blank')} style={{ background: 'transparent', border: 'none', color: '#7dd3c0', fontSize: '14px', cursor: 'pointer' }}>Read →</button>}
                       </div>
                     ))}
                   </div>
@@ -1699,18 +1843,25 @@
     // PERSON PROFILE PAGE
     const PersonProfilePage = ({ person, setCurrentPage, setSelectedCompany }) => {
       const [activeTab, setActiveTab] = useState('overview');
+      const apiData = useApiData();
 
       if (!person) {
         setCurrentPage('people');
         return null;
       }
 
-      // Sample publications for the person
-      const publications = [
-        { title: 'Psilocybin produces substantial and sustained decreases in depression and anxiety', journal: 'Journal of Psychopharmacology', year: 2024, citations: 245 },
-        { title: 'Neural correlates of the psychedelic state', journal: 'Nature Neuroscience', year: 2023, citations: 189 },
-        { title: 'MDMA-assisted therapy for severe PTSD: a randomized, double-blind trial', journal: 'Nature Medicine', year: 2023, citations: 312 },
-      ];
+      // Live publications: papers in the database whose author list matches
+      // this person's surname. Heuristic, but every result is a real paper.
+      const nameParts = person.name.replace(/,.*$/, '').split(/\s+/)
+        .filter(w => w.length > 2 && !/^(dr|prof|professor|phd|md|jr|sr)\.?$/i.test(w));
+      const lastName = (nameParts[nameParts.length - 1] || '').toLowerCase();
+      const publications = lastName
+        ? (apiData?.researchPapers || [])
+            .filter(p => (p.authors || []).some(a => (a.name || '').toLowerCase().includes(lastName)))
+            .sort((a, b) => (b.year || 0) - (a.year || 0))
+            .slice(0, 10)
+            .map(p => ({ title: p.title, journal: p.journal || (p.isPreprint ? 'Preprint' : '—'), year: p.year || '—', citations: p.citationCount || 0, url: p.url }))
+        : [];
 
       return (
         <div style={{ position: 'relative', zIndex: 1, paddingTop: '100px', minHeight: '100vh' }}>
@@ -1738,8 +1889,8 @@
                 </div>
               </div>
               <div style={{ display: 'flex', gap: '12px' }}>
-                <button style={{ ...sharedStyles.button, padding: '14px 28px' }}>Follow</button>
-                <button style={{ ...sharedStyles.buttonOutline, padding: '14px 28px' }}>Message</button>
+                <SaveButton entityType="person" entityId={person.id} entityTitle={person.name} kind="follow" style={{ padding: '14px 28px' }} />
+                <SaveButton entityType="person" entityId={person.id} entityTitle={person.name} style={{ padding: '14px 28px' }} />
               </div>
             </div>
 
@@ -1779,13 +1930,16 @@
                       <button onClick={() => setActiveTab('publications')} style={{ background: 'transparent', border: 'none', color: '#7dd3c0', fontSize: '14px', cursor: 'pointer' }}>View All →</button>
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                      {publications.length === 0 && (
+                        <p style={{ fontSize: '14px', color: '#6b7370', padding: '8px 0' }}>No publications indexed for this person yet — the PubMed crawler links papers by author name as it runs.</p>
+                      )}
                       {publications.slice(0, 2).map((pub, i) => (
                         <div key={i} style={{ padding: '16px', background: 'rgba(255,255,255,0.02)', borderRadius: '12px' }}>
                           <div style={{ fontSize: '15px', fontWeight: 500, color: '#e8ebe9', marginBottom: '8px', lineHeight: 1.4 }}>{pub.title}</div>
                           <div style={{ display: 'flex', gap: '12px', alignItems: 'center', fontSize: '13px' }}>
                             <span style={{ color: '#7dd3c0' }}>{pub.journal}</span>
                             <span style={{ color: '#6b7370' }}>{pub.year}</span>
-                            <span style={{ color: '#f0b775' }}>{pub.citations} citations</span>
+                            {pub.citations > 0 && <span style={{ color: '#f0b775' }}>{pub.citations} citations</span>}
                           </div>
                         </div>
                       ))}
@@ -1818,7 +1972,10 @@
 
             {activeTab === 'publications' && (
               <div style={{ ...sharedStyles.card }}>
-                <h3 style={{ fontSize: '20px', fontWeight: 600, color: '#fff', marginBottom: '24px' }}>Publications ({person.papers})</h3>
+                <h3 style={{ fontSize: '20px', fontWeight: 600, color: '#fff', marginBottom: '24px' }}>Publications in the Neuly Database</h3>
+                {publications.length === 0 && (
+                  <p style={{ fontSize: '14px', color: '#6b7370' }}>No publications indexed for this person yet — the PubMed crawler links papers by author name as it runs.</p>
+                )}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                   {publications.map((pub, i) => (
                     <div key={i} style={{ display: 'flex', gap: '20px', padding: '20px', background: 'rgba(255,255,255,0.02)', borderRadius: '14px', alignItems: 'flex-start' }}>
@@ -1828,10 +1985,10 @@
                         <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
                           <span style={{ fontSize: '14px', color: '#7dd3c0' }}>{pub.journal}</span>
                           <span style={{ fontSize: '13px', color: '#6b7370' }}>{pub.year}</span>
-                          <span style={{ padding: '3px 8px', fontSize: '11px', fontWeight: 600, background: 'rgba(240,183,117,0.1)', color: '#f0b775', borderRadius: '4px' }}>{pub.citations} citations</span>
+                          {pub.citations > 0 && <span style={{ padding: '3px 8px', fontSize: '11px', fontWeight: 600, background: 'rgba(240,183,117,0.1)', color: '#f0b775', borderRadius: '4px' }}>{pub.citations} citations</span>}
                         </div>
                       </div>
-                      <button style={{ background: 'transparent', border: 'none', color: '#7dd3c0', fontSize: '14px', cursor: 'pointer' }}>View →</button>
+                      {pub.url && <button onClick={() => window.open(pub.url, '_blank')} style={{ background: 'transparent', border: 'none', color: '#7dd3c0', fontSize: '14px', cursor: 'pointer' }}>View →</button>}
                     </div>
                   ))}
                 </div>
@@ -1861,12 +2018,39 @@
       );
     };
 
-    // RESEARCH AGENT PAGE - Full Featured
+    // RESEARCH AGENT PAGE — keyword search over the live papers and
+    // clinical trials already loaded from the API. Every answer is built
+    // from real records; agents and query history persist in localStorage.
+    const AGENTS_STORAGE_KEY = 'neuly_research_agents';
+    const HISTORY_STORAGE_KEY = 'neuly_research_history';
+    const loadLocal = (key) => { try { return JSON.parse(localStorage.getItem(key)) || []; } catch { return []; } };
+    const saveLocal = (key, value) => { try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { /* private mode */ } };
+
+    const SEARCH_STOPWORDS = new Set(['the', 'a', 'an', 'of', 'for', 'on', 'in', 'and', 'or', 'to', 'with', 'what', 'are', 'is', 'was', 'were', 'about', 'latest', 'findings', 'finding', 'does', 'say', 'says', 'how', 'can', 'you', 'tell', 'show', 'compare', 'between', 'effect', 'effects', 'research', 'study', 'studies', 'paper', 'papers']);
+    const searchTokens = (text) => (text || '').toLowerCase().split(/[^a-z0-9-]+/).filter(w => w.length > 2 && !SEARCH_STOPWORDS.has(w));
+
+    const rankRecords = (query, records, fields) => {
+      const terms = searchTokens(query);
+      if (terms.length === 0) return [];
+      return records
+        .map(record => {
+          const haystack = fields
+            .map(f => { const v = record[f]; return Array.isArray(v) ? v.join(' ') : (v || ''); })
+            .join(' ').toLowerCase();
+          const score = terms.reduce((s, t) => s + (haystack.includes(t) ? 1 : 0), 0);
+          return { record, score };
+        })
+        .filter(x => x.score > 0)
+        .sort((a, b) => b.score - a.score || (b.record.citationCount || 0) - (a.record.citationCount || 0))
+        .map(x => x.record);
+    };
+
     const ResearchAgentPage = ({ user }) => {
       const apiData = useApiData();
       const papers = apiData?.researchPapers || [];
+      const trials = apiData?.clinicalTrials || [];
       const paperCount = apiData?.stats?.counts?.researchPapers ?? papers.length;
-      const studyCount = apiData?.stats?.counts?.clinicalTrials ?? 0;
+      const studyCount = apiData?.stats?.counts?.clinicalTrials ?? trials.length;
       const journalCount = new Set(papers.map(p => p.journal).filter(Boolean)).size;
       const citationTotal = papers.reduce((sum, p) => sum + (p.citationCount || 0), 0);
       const fmtK = (n) => n >= 1000 ? `${Math.round(n / 1000)}K` : String(n);
@@ -1876,36 +2060,17 @@
       const [isTyping, setIsTyping] = useState(false);
       const [showCreateAgent, setShowCreateAgent] = useState(false);
       const [agentConfig, setAgentConfig] = useState({ name: 'Research Agent', focus: 'All Research', style: 'detailed', includeCitations: true, includeAbstracts: true });
+      const [myAgents, setMyAgents] = useState(() => loadLocal(AGENTS_STORAGE_KEY));
+      const [queryHistory, setQueryHistory] = useState(() => loadLocal(HISTORY_STORAGE_KEY));
       const messagesEndRef = useRef(null);
 
-      const myAgents = [
-        { id: 1, name: 'Depression Research', focus: 'Psilocybin', style: 'academic', queries: 24, lastUsed: '2 hours ago' },
-        { id: 2, name: 'PTSD Studies', focus: 'MDMA', style: 'detailed', queries: 18, lastUsed: '1 day ago' },
-        { id: 3, name: 'General Research', focus: 'All Research', style: 'concise', queries: 45, lastUsed: '3 days ago' },
-      ];
-
-      const recentQueries = [
-        { query: 'What are the latest findings on psilocybin for depression?', time: '2 hours ago', results: 12 },
-        { query: 'Compare MDMA and psilocybin therapy outcomes', time: '5 hours ago', results: 8 },
-        { query: 'Neuroplasticity effects of psychedelics', time: '1 day ago', results: 15 },
-        { query: 'Ketamine vs psilocybin for treatment-resistant depression', time: '2 days ago', results: 6 },
-      ];
-
       const suggestedQuestions = [
-        'What are the latest findings on psilocybin for depression?',
-        'Compare MDMA and psilocybin therapy outcomes',
-        'What does research say about microdosing?',
-        'Explain the default mode network effects',
-        'What are the risks of psychedelic therapy?',
-        'How do psychedelics affect neuroplasticity?'
-      ];
-
-      const researchDatabase = [
-        { id: 1, title: 'Psilocybin produces substantial and sustained decreases in depression and anxiety', authors: 'Griffiths RR, Johnson MW, et al.', journal: 'Journal of Psychopharmacology', year: 2024, citations: 245, substance: 'Psilocybin', abstract: 'High-dose psilocybin produced large decreases in clinician- and self-rated measures of depressed mood and anxiety...' },
-        { id: 2, title: 'MDMA-assisted therapy for severe PTSD: a randomized, double-blind, placebo-controlled phase 3 study', authors: 'Mitchell JM, Bogenschutz M, et al.', journal: 'Nature Medicine', year: 2023, citations: 312, substance: 'MDMA', abstract: 'MDMA-assisted therapy was highly efficacious in individuals with severe PTSD...' },
-        { id: 3, title: 'Neural correlates of the psychedelic state as determined by fMRI studies with psilocybin', authors: 'Carhart-Harris RL, et al.', journal: 'PNAS', year: 2022, citations: 189, substance: 'Psilocybin', abstract: 'The subjective effects of psychedelics are linked to decreased activity in the default mode network...' },
-        { id: 4, title: 'Ketamine and rapid-acting antidepressants: a new era in the battle against depression', authors: 'Krystal JH, et al.', journal: 'Nature Reviews Drug Discovery', year: 2023, citations: 156, substance: 'Ketamine', abstract: 'Ketamine represents a paradigm shift in depression treatment...' },
-        { id: 5, title: 'LSD acutely impairs fear recognition and enhances emotional empathy', authors: 'Dolder PC, et al.', journal: 'Neuropsychopharmacology', year: 2023, citations: 87, substance: 'LSD', abstract: 'LSD enhanced emotional empathy and impaired the recognition of fearful faces...' },
+        'Psilocybin for treatment-resistant depression',
+        'MDMA-assisted therapy for PTSD',
+        'Ketamine and rapid-acting antidepressants',
+        'Psychedelics and neuroplasticity',
+        'Microdosing outcomes',
+        'Ayahuasca clinical research'
       ];
 
       const scrollToBottom = () => {
@@ -1917,42 +2082,75 @@
       }, [messages]);
 
       const generateResponse = (query) => {
-        const q = query.toLowerCase();
-        let response = { text: '', sources: [] };
-        
-        if (q.includes('psilocybin') && q.includes('depression')) {
-          response.text = `Based on my analysis of the research database, here are the key findings on psilocybin for depression:\n\n**Efficacy:**\n• Multiple Phase 2 and Phase 3 trials show significant reductions in depression scores\n• Effects can persist for weeks to months after just 1-2 sessions\n• 50-70% of participants show clinically meaningful improvement\n\n**Mechanism:**\n• Psilocybin increases neuroplasticity and promotes new neural connections\n• Decreases activity in the default mode network (DMN)\n• Enhances emotional processing and openness\n\n**Current Status:**\n• FDA Breakthrough Therapy designation for treatment-resistant depression\n• Phase 3 trials ongoing (COMPASS Pathways, Usona Institute)\n• Expected FDA decision in 2025-2026`;
-          response.sources = researchDatabase.filter(p => p.substance === 'Psilocybin').slice(0, 3);
-        } else if (q.includes('mdma') && q.includes('ptsd')) {
-          response.text = `Here's what the research shows about MDMA-assisted therapy for PTSD:\n\n**Clinical Results:**\n• Phase 3 trials showed 67% of participants no longer met PTSD criteria\n• Significantly outperformed placebo + therapy\n• Effects maintained at 12-month follow-up\n\n**How It Works:**\n• MDMA reduces fear response while enhancing trust and openness\n• Allows patients to process traumatic memories without overwhelming anxiety\n• Combined with psychotherapy sessions\n\n**Regulatory Status:**\n• FDA Breakthrough Therapy designation\n• NDA submitted to FDA in 2024\n• Expected decision in 2025`;
-          response.sources = researchDatabase.filter(p => p.substance === 'MDMA').slice(0, 2);
-        } else if (q.includes('microdosing')) {
-          response.text = `Current research on psychedelic microdosing:\n\n**What We Know:**\n• Microdosing typically involves ~10% of a full dose (10-20μg LSD, 100-300mg psilocybin mushrooms)\n• Taken every 2-3 days\n• Anecdotal reports suggest improvements in mood, creativity, and focus\n\n**Research Status:**\n• Limited controlled clinical trials to date\n• Some studies show placebo effects may account for perceived benefits\n• More rigorous research needed\n\n**Ongoing Studies:**\n• Imperial College, Johns Hopkins, and others conducting controlled trials\n• Focus on cognitive effects, mood, and creativity metrics`;
-          response.sources = researchDatabase.slice(0, 2);
-        } else if (q.includes('default mode') || q.includes('dmn')) {
-          response.text = `The Default Mode Network (DMN) and psychedelics:\n\n**What is the DMN:**\n• Brain network active during rest and self-reflection\n• Associated with sense of self, autobiographical memory, mind-wandering\n• Overactive in depression and rumination\n\n**Psychedelic Effects:**\n• Psilocybin, LSD, and DMT all decrease DMN activity\n• This correlates with "ego dissolution" experiences\n• May explain therapeutic effects - breaking rigid thought patterns\n\n**Clinical Implications:**\n• DMN disruption may allow new perspectives on self and problems\n• Could explain why effects persist beyond the acute experience\n• Being studied as biomarker for treatment response`;
-          response.sources = researchDatabase.filter(p => p.title.toLowerCase().includes('neural') || p.abstract.toLowerCase().includes('default')).slice(0, 2);
+        const focus = agentConfig.focus;
+        const scopedPapers = focus === 'All Research' ? papers : papers.filter(p => (p.substances || []).includes(focus));
+        const scopedTrials = focus === 'All Research' ? trials : trials.filter(t => (t.substances || []).includes(focus));
+
+        const paperHits = rankRecords(query, scopedPapers, ['title', 'abstract', 'journal', 'substances']);
+        const trialHits = rankRecords(query, scopedTrials, ['title', 'briefSummary', 'substances']);
+
+        const topN = agentConfig.style === 'concise' ? 3 : 5;
+        const sources = paperHits.slice(0, topN).map(p => ({
+          title: p.title,
+          authors: (p.authors || []).slice(0, 3).map(a => a.name).join(', ') + ((p.authors || []).length > 3 ? ' et al.' : ''),
+          journal: p.journal || (p.isPreprint ? 'Preprint' : 'Journal not listed'),
+          year: p.year || '—',
+          citations: p.citationCount || 0,
+          substance: (p.substances || [])[0] || 'Multiple',
+          abstract: p.abstract,
+          url: p.url
+        }));
+
+        const scopeNote = focus === 'All Research' ? '' : ` (focus: ${focus})`;
+        const lines = [];
+        if (paperHits.length === 0 && trialHits.length === 0) {
+          lines.push(`I searched the live Neuly database${scopeNote} — ${scopedPapers.length.toLocaleString()} papers and ${scopedTrials.length.toLocaleString()} clinical studies — and didn't find records matching “${query}”.`);
+          lines.push('');
+          lines.push('Try different keywords (substance names, conditions, or authors), or broaden the agent focus in the sidebar.');
         } else {
-          response.text = `I found several relevant papers in the database related to your query.\n\n**Summary:**\nThe research on natural medicine therapies continues to show promising results across multiple conditions including depression, anxiety, PTSD, and addiction.\n\n**Key Themes:**\n• Psychedelic-assisted therapy shows significant efficacy in clinical trials\n• Effects often persist long after the acute experience\n• Integration with psychotherapy is crucial\n• Safety profiles are generally favorable in controlled settings\n\nWould you like me to search for more specific topics or compare particular substances?`;
-          response.sources = researchDatabase.slice(0, 3);
+          lines.push(`I searched the live Neuly database${scopeNote} for “${query}” and found ${paperHits.length.toLocaleString()} matching paper${paperHits.length === 1 ? '' : 's'} and ${trialHits.length.toLocaleString()} matching clinical stud${trialHits.length === 1 ? 'y' : 'ies'}.`);
+          if (sources.length > 0) {
+            lines.push('');
+            lines.push(`**Top papers:**`);
+            sources.forEach(s => {
+              lines.push(`• ${s.title} — ${s.journal}, ${s.year}${agentConfig.includeCitations && s.citations ? ` (${s.citations} citations)` : ''}`);
+              if (agentConfig.includeAbstracts && agentConfig.style !== 'concise' && s.abstract) {
+                lines.push(`  ${s.abstract.slice(0, 220)}${s.abstract.length > 220 ? '…' : ''}`);
+              }
+            });
+          }
+          if (trialHits.length > 0) {
+            lines.push('');
+            lines.push('**Related clinical studies:**');
+            trialHits.slice(0, 3).forEach(t => {
+              lines.push(`• ${t.title}${t.phase ? ` — ${t.phase}` : ''}${t.status ? `, ${t.status}` : ''}`);
+            });
+          }
+          lines.push('');
+          lines.push('Full source details below — open any paper to read the original.');
         }
-        
-        return response;
+
+        return { text: lines.join('\n'), sources: agentConfig.includeCitations ? sources : [], results: paperHits.length + trialHits.length };
       };
 
       const handleSend = () => {
         if (!input.trim() || isTyping) return;
-        
-        const userMessage = { role: 'user', content: input };
-        setMessages(prev => [...prev, userMessage]);
+
+        const query = input.trim();
+        setMessages(prev => [...prev, { role: 'user', content: query }]);
         setInput('');
         setIsTyping(true);
-        
+
         setTimeout(() => {
-          const response = generateResponse(input);
+          const response = generateResponse(query);
           setMessages(prev => [...prev, { role: 'agent', content: response.text, sources: response.sources }]);
           setIsTyping(false);
-        }, 1500);
+          setQueryHistory(prev => {
+            const next = [{ query, time: new Date().toISOString(), results: response.results }, ...prev].slice(0, 25);
+            saveLocal(HISTORY_STORAGE_KEY, next);
+            return next;
+          });
+        }, 600);
       };
 
       const handleKeyDown = (e) => {
@@ -2040,7 +2238,11 @@
 
             <div style={{ display: 'flex', gap: '12px' }}>
               <button onClick={() => setShowCreateAgent(false)} style={{ ...sharedStyles.buttonOutline, flex: 1 }}>Cancel</button>
-              <button onClick={() => setShowCreateAgent(false)} style={{ ...sharedStyles.button, flex: 1 }}>Create Agent</button>
+              <button onClick={() => {
+                const agent = { id: String(Date.now()), name: agentConfig.name || 'Research Agent', focus: agentConfig.focus, style: agentConfig.style, includeCitations: agentConfig.includeCitations, includeAbstracts: agentConfig.includeAbstracts, createdAt: new Date().toISOString() };
+                setMyAgents(prev => { const next = [agent, ...prev].slice(0, 20); saveLocal(AGENTS_STORAGE_KEY, next); return next; });
+                setShowCreateAgent(false);
+              }} style={{ ...sharedStyles.button, flex: 1 }}>Create Agent</button>
             </div>
           </div>
         </div>
@@ -2095,10 +2297,10 @@
             <div>
               <div style={{ fontSize: '11px', fontWeight: 600, color: '#6b7370', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '16px' }}>Quick Filters</div>
               {['Psilocybin', 'MDMA', 'Ketamine', 'LSD', 'Ayahuasca'].map(substance => (
-                <div key={substance} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 0', borderBottom: '1px solid rgba(255,255,255,0.04)', cursor: 'pointer' }}>
+                <div key={substance} onClick={() => { setActiveTab('chat'); setInput(`${substance} clinical research`); }} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 0', borderBottom: '1px solid rgba(255,255,255,0.04)', cursor: 'pointer' }}>
                   <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: substanceColors[substance] || '#7dd3c0' }} />
                   <span style={{ fontSize: '13px', color: '#a0a8a4' }}>{substance}</span>
-                  <span style={{ fontSize: '11px', color: '#6b7370', marginLeft: 'auto' }}>{researchDatabase.filter(p => p.substance === substance).length * 200}</span>
+                  <span style={{ fontSize: '11px', color: '#6b7370', marginLeft: 'auto' }}>{papers.filter(p => (p.substances || []).includes(substance)).length}</span>
                 </div>
               ))}
             </div>
@@ -2148,7 +2350,9 @@
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                                   {msg.sources.map((source, j) => (
                                     <div key={j} style={{ padding: '14px 16px', background: 'rgba(255,255,255,0.02)', borderRadius: '12px', borderLeft: `3px solid ${substanceColors[source.substance] || '#7dd3c0'}` }}>
-                                      <div style={{ fontSize: '14px', fontWeight: 500, color: '#e8ebe9', marginBottom: '6px', lineHeight: 1.4 }}>{source.title}</div>
+                                      {source.url
+                                        ? <a href={source.url} target="_blank" rel="noopener noreferrer" style={{ display: 'block', fontSize: '14px', fontWeight: 500, color: '#e8ebe9', marginBottom: '6px', lineHeight: 1.4, textDecoration: 'none' }}>{source.title} ↗</a>
+                                        : <div style={{ fontSize: '14px', fontWeight: 500, color: '#e8ebe9', marginBottom: '6px', lineHeight: 1.4 }}>{source.title}</div>}
                                       <div style={{ fontSize: '12px', color: '#6b7370' }}>{source.authors} • {source.journal} • {source.year}</div>
                                       <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
                                         <span style={{ padding: '3px 8px', fontSize: '10px', fontWeight: 600, background: `${substanceColors[source.substance]}20`, color: substanceColors[source.substance], borderRadius: '4px' }}>{source.substance}</span>
@@ -2196,7 +2400,7 @@
                       <button onClick={handleSend} disabled={!input.trim() || isTyping} style={{ ...sharedStyles.button, padding: '16px 28px', opacity: (!input.trim() || isTyping) ? 0.5 : 1, cursor: (!input.trim() || isTyping) ? 'not-allowed' : 'pointer' }}>Send</button>
                     </div>
                     <div style={{ fontSize: '12px', color: '#4a524e', marginTop: '12px', textAlign: 'center' }}>
-                      Research Agent indexes papers from PubMed, Nature, JAMA, and 800+ journals. Always verify findings with primary sources.
+                      Research Agent searches the live Neuly database — {paperCount.toLocaleString()} papers and {studyCount.toLocaleString()} clinical studies crawled from PubMed, bioRxiv/medRxiv, and ClinicalTrials.gov. Always verify findings with primary sources.
                     </div>
                   </div>
                 </div>
@@ -2223,12 +2427,12 @@
                           </div>
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '16px', fontSize: '13px' }}>
-                          <span style={{ color: '#6b7370' }}>Queries: <span style={{ color: '#a0a8a4' }}>{agent.queries}</span></span>
+                          <span style={{ color: '#6b7370' }}>Focus: <span style={{ color: '#a0a8a4' }}>{agent.focus}</span></span>
                           <span style={{ color: '#6b7370' }}>Style: <span style={{ color: '#a0a8a4', textTransform: 'capitalize' }}>{agent.style}</span></span>
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '16px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-                          <span style={{ fontSize: '12px', color: '#4a524e' }}>Last used {agent.lastUsed}</span>
-                          <button style={{ padding: '8px 16px', fontSize: '13px', background: 'rgba(125,211,192,0.15)', border: 'none', borderRadius: '8px', color: '#7dd3c0', cursor: 'pointer' }}>Use Agent</button>
+                          <span style={{ fontSize: '12px', color: '#4a524e' }}>Created {timeAgo(agent.createdAt)}</span>
+                          <button onClick={() => { setAgentConfig({ name: agent.name, focus: agent.focus, style: agent.style, includeCitations: agent.includeCitations !== false, includeAbstracts: agent.includeAbstracts !== false }); setActiveTab('chat'); }} style={{ padding: '8px 16px', fontSize: '13px', background: 'rgba(125,211,192,0.15)', border: 'none', borderRadius: '8px', color: '#7dd3c0', cursor: 'pointer' }}>Use Agent</button>
                         </div>
                       </div>
                     ))}
@@ -2245,19 +2449,27 @@
               <div style={{ flex: 1, overflowY: 'auto', padding: '32px 40px' }}>
                 <div style={{ maxWidth: '800px', margin: '0 auto' }}>
                   <h2 style={{ fontFamily: '"Fraunces", serif', fontSize: '28px', fontWeight: 600, color: '#fff', marginBottom: '8px' }}>Query History</h2>
-                  <p style={{ fontSize: '15px', color: '#6b7370', marginBottom: '32px' }}>Your recent research queries across all agents</p>
+                  <p style={{ fontSize: '15px', color: '#6b7370', marginBottom: '32px' }}>Your recent research queries on this device</p>
+                  {queryHistory.length === 0 && (
+                    <div style={{ textAlign: 'center', padding: '60px 40px' }}>
+                      <div style={{ fontSize: '48px', marginBottom: '16px' }}>🔍</div>
+                      <h3 style={{ fontSize: '20px', fontWeight: 600, color: '#fff', marginBottom: '8px' }}>No queries yet</h3>
+                      <p style={{ fontSize: '15px', color: '#6b7370', marginBottom: '24px' }}>Your research queries will appear here after you ask the agent something</p>
+                      <button onClick={() => setActiveTab('chat')} style={sharedStyles.buttonOutline}>Start Researching</button>
+                    </div>
+                  )}
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                    {recentQueries.map((item, i) => (
-                      <div key={i} style={{ ...sharedStyles.card, display: 'flex', alignItems: 'center', gap: '20px', cursor: 'pointer' }}>
+                    {queryHistory.map((item, i) => (
+                      <div key={i} style={{ ...sharedStyles.card, display: 'flex', alignItems: 'center', gap: '20px' }}>
                         <div style={{ width: '44px', height: '44px', borderRadius: '12px', background: 'rgba(125,211,192,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px' }}>🔍</div>
                         <div style={{ flex: 1 }}>
                           <div style={{ fontSize: '15px', color: '#e8ebe9', marginBottom: '6px' }}>{item.query}</div>
                           <div style={{ display: 'flex', gap: '16px', fontSize: '13px', color: '#6b7370' }}>
-                            <span>{item.time}</span>
-                            <span>{item.results} results</span>
+                            <span>{timeAgo(item.time)}</span>
+                            <span>{item.results} result{item.results === 1 ? '' : 's'}</span>
                           </div>
                         </div>
-                        <button style={{ padding: '8px 16px', fontSize: '13px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', color: '#a0a8a4', cursor: 'pointer' }}>View</button>
+                        <button onClick={() => { setInput(item.query); setActiveTab('chat'); }} style={{ padding: '8px 16px', fontSize: '13px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', color: '#a0a8a4', cursor: 'pointer' }}>Run Again</button>
                       </div>
                     ))}
                   </div>
@@ -2308,19 +2520,21 @@
     const CarePage = ({ user }) => {
       const [selectedType, setSelectedType] = useState('All');
       const [selectedRegion, setSelectedRegion] = useState('All');
+      // Curated directory of real providers. No ratings shown — Neuly does
+      // not collect reviews yet, so none are displayed.
       const providers = [
-        { id: 1, name: 'Mindbloom', type: 'Ketamine Clinic', location: 'New York, USA', region: 'North America', rating: 4.8, reviews: 1240, substances: ['Ketamine'], accepting: true, insurance: true, description: 'At-home ketamine therapy with psychiatric evaluation, guided sessions, and integration coaching.', website: 'mindbloom.com' },
-        { id: 2, name: 'Beckley Retreats', type: 'Psilocybin Retreat', location: 'Montego Bay, Jamaica', region: 'Caribbean', rating: 4.9, reviews: 380, substances: ['Psilocybin'], accepting: true, insurance: false, description: 'Evidence-based psilocybin retreat programs combining science and ceremony in a luxury setting.', website: 'beckleyretreats.com' },
-        { id: 3, name: 'Field Trip Health', type: 'Ketamine Clinic', location: 'Toronto, Canada', region: 'North America', rating: 4.7, reviews: 890, substances: ['Ketamine'], accepting: true, insurance: false, description: 'Ketamine-enhanced psychotherapy in modern clinic settings with experienced therapists.', website: 'fieldtriphealth.com' },
-        { id: 4, name: 'Nushama', type: 'Ketamine Clinic', location: 'Manhattan, USA', region: 'North America', rating: 4.8, reviews: 560, substances: ['Ketamine'], accepting: true, insurance: false, description: 'Premium ketamine wellness center offering IV infusions and psychedelic-assisted therapy in NYC.', website: 'nushama.com' },
-        { id: 5, name: 'Synthesis Institute', type: 'Psilocybin Retreat', location: 'Amsterdam, Netherlands', region: 'Europe', rating: 4.9, reviews: 620, substances: ['Psilocybin (Truffles)'], accepting: true, insurance: false, description: 'Legal psilocybin truffle ceremonies in a research-informed, group retreat format in the Netherlands.', website: 'synthesisretreat.com' },
-        { id: 6, name: 'Numinus Wellness', type: 'Integrative Clinic', location: 'Vancouver, Canada', region: 'North America', rating: 4.6, reviews: 430, substances: ['Ketamine', 'MDMA (trial)'], accepting: true, insurance: true, description: 'Integrative mental health clinic offering ketamine therapy and participating in MDMA clinical trials.', website: 'numinus.com' },
-        { id: 7, name: 'MyDelica', type: 'Psilocybin Retreat', location: 'Cascais, Portugal', region: 'Europe', rating: 4.7, reviews: 210, substances: ['Psilocybin (Truffles)'], accepting: true, insurance: false, description: 'Personalized psilocybin retreat experiences with clinical preparation and integration support in Portugal.', website: 'mydelica.com' },
-        { id: 8, name: 'Klarisana', type: 'Ketamine Clinic', location: 'Austin, USA', region: 'North America', rating: 4.5, reviews: 780, substances: ['Ketamine'], accepting: true, insurance: true, description: 'Multi-location ketamine clinic specializing in treatment-resistant depression, PTSD, and chronic pain.', website: 'klarisana.com' },
-        { id: 9, name: 'Silo Wellness', type: 'Psilocybin Retreat', location: 'Oaxaca, Mexico', region: 'Latin America', rating: 4.6, reviews: 290, substances: ['Psilocybin'], accepting: true, insurance: false, description: 'Culturally respectful psilocybin retreats integrating indigenous Mazatec traditions with modern therapy.', website: 'silowellness.com' },
-        { id: 10, name: 'Innerwell', type: 'Ketamine Clinic', location: 'Los Angeles, USA', region: 'North America', rating: 4.7, reviews: 950, substances: ['Ketamine'], accepting: true, insurance: false, description: 'Telehealth ketamine therapy combining at-home sublingual ketamine with virtual therapist sessions.', website: 'innerwell.com' },
-        { id: 11, name: 'Tandava Retreats', type: 'Ayahuasca Retreat', location: 'Iquitos, Peru', region: 'Latin America', rating: 4.8, reviews: 340, substances: ['Ayahuasca'], accepting: true, insurance: false, description: 'Traditional ayahuasca ceremonies with Shipibo healers in the Peruvian Amazon with medical screening.', website: 'tandavaretreats.com' },
-        { id: 12, name: 'Novamind', type: 'Integrative Clinic', location: 'Salt Lake City, USA', region: 'North America', rating: 4.5, reviews: 320, substances: ['Ketamine', 'Spravato'], accepting: true, insurance: true, description: 'Network of mental health clinics offering ketamine, Spravato, and psychedelic-assisted therapy research.', website: 'novamind.ca' }
+        { id: 1, name: 'Mindbloom', type: 'Ketamine Clinic', location: 'New York, USA', region: 'North America', substances: ['Ketamine'], accepting: true, insurance: true, description: 'At-home ketamine therapy with psychiatric evaluation, guided sessions, and integration coaching.', website: 'mindbloom.com' },
+        { id: 2, name: 'Beckley Retreats', type: 'Psilocybin Retreat', location: 'Montego Bay, Jamaica', region: 'Caribbean', substances: ['Psilocybin'], accepting: true, insurance: false, description: 'Evidence-based psilocybin retreat programs combining science and ceremony in a luxury setting.', website: 'beckleyretreats.com' },
+        { id: 3, name: 'Field Trip Health', type: 'Ketamine Clinic', location: 'Toronto, Canada', region: 'North America', substances: ['Ketamine'], accepting: true, insurance: false, description: 'Ketamine-enhanced psychotherapy in modern clinic settings with experienced therapists.', website: 'fieldtriphealth.com' },
+        { id: 4, name: 'Nushama', type: 'Ketamine Clinic', location: 'Manhattan, USA', region: 'North America', substances: ['Ketamine'], accepting: true, insurance: false, description: 'Premium ketamine wellness center offering IV infusions and psychedelic-assisted therapy in NYC.', website: 'nushama.com' },
+        { id: 5, name: 'Synthesis Institute', type: 'Psilocybin Retreat', location: 'Amsterdam, Netherlands', region: 'Europe', substances: ['Psilocybin (Truffles)'], accepting: true, insurance: false, description: 'Legal psilocybin truffle ceremonies in a research-informed, group retreat format in the Netherlands.', website: 'synthesisretreat.com' },
+        { id: 6, name: 'Numinus Wellness', type: 'Integrative Clinic', location: 'Vancouver, Canada', region: 'North America', substances: ['Ketamine', 'MDMA (trial)'], accepting: true, insurance: true, description: 'Integrative mental health clinic offering ketamine therapy and participating in MDMA clinical trials.', website: 'numinus.com' },
+        { id: 7, name: 'MyDelica', type: 'Psilocybin Retreat', location: 'Cascais, Portugal', region: 'Europe', substances: ['Psilocybin (Truffles)'], accepting: true, insurance: false, description: 'Personalized psilocybin retreat experiences with clinical preparation and integration support in Portugal.', website: 'mydelica.com' },
+        { id: 8, name: 'Klarisana', type: 'Ketamine Clinic', location: 'Austin, USA', region: 'North America', substances: ['Ketamine'], accepting: true, insurance: true, description: 'Multi-location ketamine clinic specializing in treatment-resistant depression, PTSD, and chronic pain.', website: 'klarisana.com' },
+        { id: 9, name: 'Silo Wellness', type: 'Psilocybin Retreat', location: 'Oaxaca, Mexico', region: 'Latin America', substances: ['Psilocybin'], accepting: true, insurance: false, description: 'Culturally respectful psilocybin retreats integrating indigenous Mazatec traditions with modern therapy.', website: 'silowellness.com' },
+        { id: 10, name: 'Innerwell', type: 'Ketamine Clinic', location: 'Los Angeles, USA', region: 'North America', substances: ['Ketamine'], accepting: true, insurance: false, description: 'Telehealth ketamine therapy combining at-home sublingual ketamine with virtual therapist sessions.', website: 'innerwell.com' },
+        { id: 11, name: 'Tandava Retreats', type: 'Ayahuasca Retreat', location: 'Iquitos, Peru', region: 'Latin America', substances: ['Ayahuasca'], accepting: true, insurance: false, description: 'Traditional ayahuasca ceremonies with Shipibo healers in the Peruvian Amazon with medical screening.', website: 'tandavaretreats.com' },
+        { id: 12, name: 'Novamind', type: 'Integrative Clinic', location: 'Salt Lake City, USA', region: 'North America', substances: ['Ketamine', 'Spravato'], accepting: true, insurance: true, description: 'Network of mental health clinics offering ketamine, Spravato, and psychedelic-assisted therapy research.', website: 'novamind.ca' }
       ];
       const types = ['All', 'Ketamine Clinic', 'Psilocybin Retreat', 'Integrative Clinic', 'Ayahuasca Retreat'];
       const regions = ['All', 'North America', 'Europe', 'Caribbean', 'Latin America'];
@@ -2331,7 +2545,7 @@
           <div style={{ padding: '40px', maxWidth: '1280px', margin: '0 auto' }}>
             <div style={{ textAlign: 'center', marginBottom: '48px' }}><div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}><NeulyLogo height={32} suffix="care" /></div><h1 style={{ fontFamily: '"Fraunces", serif', fontSize: '42px', fontWeight: 600, color: '#fff', marginBottom: '12px' }}>Care Directory</h1><p style={{ fontSize: '16px', color: '#6b7370', maxWidth: '600px', margin: '0 auto' }}>Find trusted psychedelic therapy clinics, retreat centers, and integrative care providers worldwide</p></div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', marginBottom: '32px' }}>
-              {[{ label: 'Providers', value: providers.length, icon: '🏥' }, { label: 'Countries', value: new Set(providers.map(p => p.location.split(', ').pop())).size, icon: '🌍' }, { label: 'Avg Rating', value: (providers.reduce((s, p) => s + p.rating, 0) / providers.length).toFixed(1), icon: '⭐' }, { label: 'Accept Insurance', value: providers.filter(p => p.insurance).length, icon: '🛡️' }].map((stat, i) => (<div key={i} style={{ ...sharedStyles.card, textAlign: 'center', padding: '20px' }}><span style={{ fontSize: '24px' }}>{stat.icon}</span><div style={{ fontSize: '28px', fontWeight: 700, color: '#fff', margin: '8px 0 4px' }}>{stat.value}</div><div style={{ fontSize: '12px', color: '#6b7370', textTransform: 'uppercase', letterSpacing: '1px' }}>{stat.label}</div></div>))}
+              {[{ label: 'Providers', value: providers.length, icon: '🏥' }, { label: 'Countries', value: new Set(providers.map(p => p.location.split(', ').pop())).size, icon: '🌍' }, { label: 'Care Types', value: new Set(providers.map(p => p.type)).size, icon: '🧭' }, { label: 'Accept Insurance', value: providers.filter(p => p.insurance).length, icon: '🛡️' }].map((stat, i) => (<div key={i} style={{ ...sharedStyles.card, textAlign: 'center', padding: '20px' }}><span style={{ fontSize: '24px' }}>{stat.icon}</span><div style={{ fontSize: '28px', fontWeight: 700, color: '#fff', margin: '8px 0 4px' }}>{stat.value}</div><div style={{ fontSize: '12px', color: '#6b7370', textTransform: 'uppercase', letterSpacing: '1px' }}>{stat.label}</div></div>))}
             </div>
             <div style={{ display: 'flex', gap: '12px', marginBottom: '32px', flexWrap: 'wrap' }}>
               {types.map(t => (<button key={t} onClick={() => setSelectedType(t)} style={{ padding: '8px 20px', borderRadius: '20px', border: selectedType === t ? 'none' : '1px solid rgba(255,255,255,0.1)', background: selectedType === t ? '#5c6ac4' : 'transparent', color: selectedType === t ? '#fff' : '#6b7370', cursor: 'pointer', fontSize: '14px', fontWeight: 500 }}>{t}</button>))}
@@ -2341,13 +2555,13 @@
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '24px' }}>{filtered.map(p => (<div key={p.id} style={{ ...sharedStyles.card }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
                 <div><h3 style={{ fontSize: '20px', fontWeight: 600, color: '#fff', marginBottom: '6px' }}>{p.name}</h3><span style={{ fontSize: '12px', padding: '4px 10px', borderRadius: '12px', background: `${typeColors[p.type] || '#5c6ac4'}22`, color: typeColors[p.type] || '#5c6ac4', fontWeight: 600 }}>{p.type}</span></div>
-                <div style={{ textAlign: 'right' }}><div style={{ color: '#f0b775', fontSize: '16px', fontWeight: 600 }}>★ {p.rating}</div><div style={{ fontSize: '11px', color: '#6b7370' }}>{p.reviews} reviews</div></div>
+                <a href={`https://${p.website}`} target="_blank" rel="noopener noreferrer" style={{ fontSize: '13px', color: '#7dd3c0', textDecoration: 'none', fontWeight: 500 }}>{p.website} ↗</a>
               </div>
               <p style={{ fontSize: '13px', color: '#6b7370', marginBottom: '16px', lineHeight: 1.5 }}>{p.description}</p>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '16px' }}>{p.substances.map(s => (<span key={s} style={{ fontSize: '11px', padding: '3px 8px', borderRadius: '8px', background: 'rgba(125,211,192,0.1)', color: '#7dd3c0' }}>{s}</span>))}</div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '16px' }}>
                 <div style={{ display: 'flex', gap: '16px', fontSize: '12px', color: '#6b7370' }}><span>📍 {p.location}</span>{p.insurance && <span style={{ color: '#7dd3c0' }}>✓ Insurance</span>}</div>
-                <div style={{ display: 'flex', gap: '8px' }}>{p.accepting && <span style={{ fontSize: '11px', padding: '4px 10px', borderRadius: '12px', background: 'rgba(125,211,192,0.15)', color: '#7dd3c0', fontWeight: 500 }}>Accepting Patients</span>}<button style={{ ...sharedStyles.button, padding: '8px 20px', fontSize: '13px' }}>View</button></div>
+                <div style={{ display: 'flex', gap: '8px' }}>{p.accepting && <span style={{ fontSize: '11px', padding: '4px 10px', borderRadius: '12px', background: 'rgba(125,211,192,0.15)', color: '#7dd3c0', fontWeight: 500 }}>Accepting Patients</span>}<button onClick={() => window.open(`https://${p.website}`, '_blank')} style={{ ...sharedStyles.button, padding: '8px 20px', fontSize: '13px' }}>Visit Site</button></div>
               </div>
             </div>))}</div>
             {filtered.length === 0 && <div style={{ textAlign: 'center', padding: '60px', color: '#6b7370' }}><p style={{ fontSize: '18px' }}>No providers match your filters</p></div>}
@@ -2417,12 +2631,12 @@
                       <span style={{ padding: '4px 10px', fontSize: '11px', fontWeight: 600, background: `${study.color}20`, color: study.color, borderRadius: '4px' }}>{study.substance}</span>
                       <span style={{ padding: '4px 10px', fontSize: '11px', background: 'rgba(255,255,255,0.05)', color: '#a0a8a4', borderRadius: '4px' }}>{study.phase}</span>
                       <span style={{ padding: '4px 10px', fontSize: '11px', background: study.status === 'Recruiting' ? 'rgba(125,211,192,0.15)' : study.status === 'Completed' ? 'rgba(168,197,226,0.15)' : 'rgba(240,183,117,0.15)', color: study.status === 'Recruiting' ? '#7dd3c0' : study.status === 'Completed' ? '#a8c5e2' : '#f0b775', borderRadius: '4px' }}>{study.status}</span>
-                      {study.enrollment && <span style={{ padding: '4px 10px', fontSize: '11px', background: 'rgba(255,255,255,0.03)', color: '#6b7370', borderRadius: '4px' }}>n={study.enrollment}</span>}
+                      {study.enrollment != null && <span style={{ padding: '4px 10px', fontSize: '11px', background: 'rgba(255,255,255,0.03)', color: '#6b7370', borderRadius: '4px' }}>n={study.enrollment}</span>}
                     </div>
                     <h3 style={{ fontSize: '18px', fontWeight: 600, color: '#fff', marginBottom: '6px' }}>{study.title}</h3>
                     <p style={{ fontSize: '14px', color: '#6b7370' }}>{study.sponsor} &bull; {study.location}</p>
                   </div>
-                  <button style={{ ...sharedStyles.button, padding: '12px 24px', flexShrink: 0, marginLeft: '20px' }}>{study.status === 'Recruiting' ? 'Inquire' : 'View'}</button>
+                  <button onClick={() => { const url = study.url || (study.nctId ? `https://clinicaltrials.gov/study/${study.nctId}` : null); if (url) window.open(url, '_blank'); }} style={{ ...sharedStyles.button, padding: '12px 24px', flexShrink: 0, marginLeft: '20px' }}>{study.status === 'Recruiting' ? 'View & Enroll' : 'View Study'}</button>
                 </div>
               ))}
             </div>
@@ -2511,7 +2725,7 @@
                       <span style={{ padding: '6px 12px', fontSize: '12px', background: 'rgba(240,183,117,0.15)', color: '#f0b775', borderRadius: '6px' }}>💰 {job.salary}</span>
                     </div>
                   </div>
-                  <button style={{ ...sharedStyles.button, padding: '12px 24px', flexShrink: 0 }}>Apply</button>
+                  <button onClick={() => job.url && window.open(job.url, '_blank')} disabled={!job.url} style={{ ...sharedStyles.button, padding: '12px 24px', flexShrink: 0, opacity: job.url ? 1 : 0.5, cursor: job.url ? 'pointer' : 'not-allowed' }}>Apply</button>
                 </div>
               ))}
             </div>
@@ -2603,7 +2817,7 @@
                           </div>
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                             <span style={{ fontSize: '16px', fontWeight: 600, color: '#7dd3c0' }}>{event.price}</span>
-                            <button style={{ ...sharedStyles.button, padding: '10px 20px' }}>Register</button>
+                            <button onClick={() => event.website && window.open(event.website, '_blank')} disabled={!event.website} style={{ ...sharedStyles.button, padding: '10px 20px', opacity: event.website ? 1 : 0.5, cursor: event.website ? 'pointer' : 'not-allowed' }}>Register</button>
                           </div>
                         </div>
                       </div>
@@ -2634,7 +2848,7 @@
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <span style={{ fontSize: '14px', fontWeight: 600, color: '#7dd3c0' }}>{event.price}</span>
-                    <button style={{ ...sharedStyles.buttonOutline, padding: '8px 16px', fontSize: '13px' }}>Details</button>
+                    <button onClick={() => event.website && window.open(event.website, '_blank')} disabled={!event.website} style={{ ...sharedStyles.buttonOutline, padding: '8px 16px', fontSize: '13px', opacity: event.website ? 1 : 0.5, cursor: event.website ? 'pointer' : 'not-allowed' }}>Details</button>
                   </div>
                 </div>
               ))}
@@ -2657,26 +2871,53 @@
     const App = () => {
       const [currentPage, setCurrentPage] = useState('home');
       const [user, setUser] = useState(null);
+      const [authModal, setAuthModal] = useState(null); // null | 'login' | 'signup'
       const [selectedCompany, setSelectedCompany] = useState(null);
       const [selectedPerson, setSelectedPerson] = useState(null);
+
+      // Restore an existing session cookie on load. Raw fetch: a 401 here
+      // just means "not signed in", which isn't an error worth logging.
+      useEffect(() => {
+        let cancelled = false;
+        fetch(`${API_BASE_URL}/auth/me`, { credentials: 'include' })
+          .then(r => (r.ok ? r.json() : null))
+          .then(res => { if (!cancelled && res && res.user) setUser(res.user); })
+          .catch(() => undefined);
+        return () => { cancelled = true; };
+      }, []);
+
+      const openAuth = (mode) => setAuthModal(mode || 'signup');
+      const onAuthed = (authedUser) => {
+        setUser(authedUser);
+        setAuthModal(null);
+        setCurrentPage('dashboard');
+        window.scrollTo(0, 0);
+      };
+      const signOut = () => {
+        api.post('/auth/logout').catch(() => undefined);
+        setUser(null);
+        setCurrentPage('home');
+      };
+
+      const homePage = (
+        <>
+          <HeroSection setCurrentPage={setCurrentPage} openAuth={openAuth} />
+          <SubstancesSection />
+          <ResearchHomeSection setCurrentPage={setCurrentPage} />
+          <CompaniesHomeSection setCurrentPage={setCurrentPage} />
+          <PeopleHomeSection setCurrentPage={setCurrentPage} />
+          <EducationHomeSection setCurrentPage={setCurrentPage} />
+          <CareHomeSection setCurrentPage={setCurrentPage} />
+          <FinalCTA openAuth={openAuth} />
+        </>
+      );
 
       const renderPage = () => {
         switch(currentPage) {
           case 'home':
-            return (
-              <>
-                <HeroSection setCurrentPage={setCurrentPage} setUser={setUser} />
-                <SubstancesSection />
-                <ResearchHomeSection />
-                <CompaniesHomeSection setCurrentPage={setCurrentPage} />
-                <PeopleHomeSection setCurrentPage={setCurrentPage} />
-                <EducationHomeSection />
-                <CareHomeSection />
-                <FinalCTA setUser={setUser} setCurrentPage={setCurrentPage} />
-              </>
-            );
+            return homePage;
           case 'dashboard':
-            return <DashboardPage user={user} setCurrentPage={setCurrentPage} />;
+            return user ? <DashboardPage user={user} setCurrentPage={setCurrentPage} /> : homePage;
           case 'research':
             return <ResearchAgentPage user={user} />;
           case 'companies':
@@ -2698,7 +2939,7 @@
           case 'events':
             return <EventsPage user={user} />;
           default:
-            return <DashboardPage user={user} setCurrentPage={setCurrentPage} />;
+            return user ? <DashboardPage user={user} setCurrentPage={setCurrentPage} /> : homePage;
         }
       };
 
@@ -2706,12 +2947,15 @@
       const appMode = Boolean(user) && isMobile;
 
       return (
-        <div style={{ ...sharedStyles.container, ...(appMode ? { paddingBottom: 'calc(84px + env(safe-area-inset-bottom))' } : {}) }}>
-          <AmbientBackground />
-          <Navigation user={user} setUser={setUser} currentPage={currentPage} setCurrentPage={setCurrentPage} />
-          {renderPage()}
-          {!appMode && <Footer />}
-        </div>
+        <SavesProvider user={user} requireAuth={openAuth}>
+          <div style={{ ...sharedStyles.container, ...(appMode ? { paddingBottom: 'calc(84px + env(safe-area-inset-bottom))' } : {}) }}>
+            <AmbientBackground />
+            <Navigation user={user} openAuth={openAuth} signOut={signOut} currentPage={currentPage} setCurrentPage={setCurrentPage} />
+            {renderPage()}
+            {!appMode && <Footer />}
+            {authModal && <AuthModal mode={authModal} setMode={setAuthModal} onClose={() => setAuthModal(null)} onAuthed={onAuthed} />}
+          </div>
+        </SavesProvider>
       );
     };
 
