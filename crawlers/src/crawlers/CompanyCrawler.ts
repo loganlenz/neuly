@@ -85,6 +85,7 @@ export class CompanyCrawler extends BaseCrawler<Company> {
   // Known psychedelic companies with their tickers/CIKs
   private static readonly KNOWN_COMPANIES: Array<{
     name: string;
+    legalName?: string;
     ticker?: string;
     cik?: string;
     type: Company['type'];
@@ -179,14 +180,6 @@ export class CompanyCrawler extends BaseCrawler<Company> {
       website: 'https://lfrx.com'
     },
     {
-      name: 'Usona Institute',
-      type: 'Non-Profit',
-      stage: 'Private',
-      substances: ['Psilocybin'],
-      focus: 'Major Depressive Disorder',
-      website: 'https://usonainstitute.org'
-    },
-    {
       name: 'Beckley Psytech',
       type: 'Biotech',
       stage: 'Private',
@@ -210,21 +203,265 @@ export class CompanyCrawler extends BaseCrawler<Company> {
       focus: 'Ketamine-Assisted Therapy Platform',
       website: 'https://journeyclinical.com'
     },
+    // --- Public / listed companies ---
     {
-      name: 'Field Trip Health',
-      type: 'Healthcare',
-      stage: 'Private',
-      substances: ['Ketamine', 'Psilocybin'],
-      focus: 'Psychedelic-Assisted Therapy Clinics',
-      website: 'https://fieldtriphealth.com'
+      name: 'GH Research',
+      ticker: 'GHRS',
+      cik: '0001830029',
+      type: 'Biotech',
+      stage: 'Public',
+      substances: ['5-MeO-DMT'],
+      focus: 'Treatment-Resistant Depression',
+      website: 'https://ghres.com'
     },
     {
-      name: 'Synthesis Institute',
+      name: 'Relmada Therapeutics',
+      ticker: 'RLMD',
+      cik: '0001553643',
+      type: 'Biotech',
+      stage: 'Public',
+      substances: ['Ketamine'],
+      focus: 'Major Depressive Disorder',
+      website: 'https://relmada.com'
+    },
+    {
+      name: 'Seelos Therapeutics',
+      ticker: 'SEEL',
+      cik: '0001510964',
+      type: 'Biotech',
+      stage: 'Public',
+      substances: ['Ketamine'],
+      focus: 'Treatment-Resistant Depression and PTSD',
+      website: 'https://seelostherapeutics.com'
+    },
+    {
+      name: 'Bright Minds Biosciences',
+      ticker: 'DRUG',
+      type: 'Biotech',
+      stage: 'Public',
+      substances: ['Psilocybin', 'Other'],
+      focus: 'Serotonin Agonists for Neuropsychiatry',
+      website: 'https://brightmindsbio.com'
+    },
+    {
+      name: 'Incannex Healthcare',
+      ticker: 'IXHL',
+      type: 'Biotech',
+      stage: 'Public',
+      substances: ['Psilocybin', 'Cannabis'],
+      focus: 'Generalized Anxiety Disorder',
+      website: 'https://incannex.com'
+    },
+    {
+      name: 'Clearmind Medicine',
+      ticker: 'CMND',
+      type: 'Biotech',
+      stage: 'Public',
+      substances: ['Other'],
+      focus: 'Alcohol Use Disorder',
+      website: 'https://clearmindmedicine.com'
+    },
+    {
+      name: 'Silo Pharma',
+      ticker: 'SILO',
+      type: 'Biotech',
+      stage: 'Public',
+      substances: ['Psilocybin', 'Ketamine'],
+      focus: 'CNS and Rare Diseases',
+      website: 'https://silopharma.com'
+    },
+    {
+      name: 'PharmaTher Holdings',
+      ticker: 'PHRRF',
+      type: 'Pharma',
+      stage: 'Public',
+      substances: ['Ketamine'],
+      focus: 'Specialty Ketamine and CNS',
+      website: 'https://pharmather.com'
+    },
+    {
+      name: 'Optimi Health',
+      ticker: 'OPTI',
+      type: 'Pharma',
+      stage: 'Public',
+      substances: ['Psilocybin', 'MDMA'],
+      focus: 'GMP Psychedelic Manufacturing',
+      website: 'https://optimihealth.ca'
+    },
+    {
+      name: 'Algernon Pharmaceuticals',
+      ticker: 'AGNPF',
+      type: 'Biotech',
+      stage: 'Public',
+      substances: ['DMT'],
+      focus: 'Stroke Recovery',
+      website: 'https://algernonpharmaceuticals.com'
+    },
+    {
+      name: 'Mydecine Innovations Group',
+      ticker: 'MYCOF',
+      type: 'Biotech',
+      stage: 'Public',
+      substances: ['Psilocybin'],
+      focus: 'Smoking Cessation and PTSD',
+      website: 'https://mydecine.com'
+    },
+    {
+      name: 'Braxia Scientific',
+      ticker: 'BRAXF',
       type: 'Healthcare',
+      stage: 'Public',
+      substances: ['Ketamine'],
+      focus: 'Ketamine Clinics and Research',
+      website: 'https://braxiascientific.com'
+    },
+    // --- Private clinical-stage biotech ---
+    {
+      name: 'Delix Therapeutics',
+      type: 'Biotech',
+      stage: 'Series B',
+      substances: ['Other'],
+      focus: 'Non-Hallucinogenic Psychoplastogens',
+      website: 'https://delixtherapeutics.com'
+    },
+    {
+      name: 'Gilgamesh Pharmaceuticals',
+      type: 'Biotech',
+      stage: 'Series B',
+      substances: ['Psilocybin', 'DMT', 'Other'],
+      focus: 'Novel Psychedelic-Inspired Medicines',
+      website: 'https://gilgameshpharma.com'
+    },
+    {
+      name: 'Transcend Therapeutics',
+      type: 'Biotech',
+      stage: 'Series A',
+      substances: ['MDMA'],
+      focus: 'PTSD (Methylone / TSND-201)',
+      website: 'https://transcendtherapeutics.com'
+    },
+    {
+      name: 'Terran Biosciences',
+      type: 'Biotech',
+      stage: 'Series A',
+      substances: ['Psilocybin', 'MDMA', 'DMT'],
+      focus: 'CNS Drug Development Platform',
+      website: 'https://terranbio.com'
+    },
+    {
+      name: 'Sensorium Therapeutics',
+      type: 'Biotech',
+      stage: 'Seed',
+      substances: ['Other'],
+      focus: 'Nature-Derived Neurotherapeutics',
+      website: 'https://sensoriumtx.com'
+    },
+    {
+      name: 'Freedom Biosciences',
+      type: 'Biotech',
+      stage: 'Seed',
+      substances: ['Ketamine'],
+      focus: 'Next-Generation Ketamine Therapeutics',
+      website: 'https://freedombiosciences.com'
+    },
+    {
+      name: 'Reunion Neuroscience',
+      type: 'Biotech',
       stage: 'Private',
       substances: ['Psilocybin'],
-      focus: 'Psilocybin Retreats and Training',
-      website: 'https://synthesisinstitute.com'
+      focus: 'Postpartum Depression',
+      website: 'https://reunionneuro.com'
+    },
+    {
+      name: 'Eleusis',
+      type: 'Biotech',
+      stage: 'Private',
+      substances: ['LSD', 'Psilocybin'],
+      focus: 'Psychedelics for Inflammation and Mental Health',
+      website: 'https://eleusisltd.com'
+    },
+    {
+      name: 'Journey Colab',
+      type: 'Biotech',
+      stage: 'Series A',
+      substances: ['Mescaline'],
+      focus: 'Addiction (Synthetic Mescaline)',
+      website: 'https://journeycolab.com'
+    },
+    {
+      name: 'Ceruvia Lifesciences',
+      type: 'Biotech',
+      stage: 'Private',
+      substances: ['LSD', 'Psilocybin'],
+      focus: 'Cluster Headache and OCD',
+      website: 'https://ceruvia.com'
+    },
+    {
+      name: 'Psilera',
+      type: 'Biotech',
+      stage: 'Seed',
+      substances: ['DMT', 'Psilocybin'],
+      focus: 'Neuroplastogen Drug Design',
+      website: 'https://psilera.com'
+    },
+    // --- Care delivery / healthcare platforms ---
+    {
+      name: 'Mindbloom',
+      type: 'Healthcare',
+      stage: 'Private',
+      substances: ['Ketamine'],
+      focus: 'At-Home Ketamine Therapy',
+      website: 'https://mindbloom.com'
+    },
+    {
+      name: 'Osmind',
+      type: 'Technology',
+      stage: 'Series A',
+      substances: ['Ketamine'],
+      focus: 'EHR and Platform for Psychiatry Clinics',
+      website: 'https://osmind.org'
+    },
+    {
+      name: 'Fluence',
+      type: 'Healthcare',
+      stage: 'Private',
+      substances: ['Psilocybin', 'MDMA', 'Ketamine'],
+      focus: 'Psychedelic Therapy Training',
+      website: 'https://fluencetraining.com'
+    },
+    // --- Non-profit research organizations ---
+    {
+      name: 'MAPS',
+      legalName: 'Multidisciplinary Association for Psychedelic Studies',
+      type: 'Non-Profit',
+      stage: 'Private',
+      substances: ['MDMA', 'Psilocybin', 'LSD', 'Ibogaine', 'Ayahuasca'],
+      focus: 'Psychedelic Research and Policy',
+      website: 'https://maps.org'
+    },
+    {
+      name: 'Heffter Research Institute',
+      type: 'Non-Profit',
+      stage: 'Private',
+      substances: ['Psilocybin'],
+      focus: 'Funding Psilocybin Research',
+      website: 'https://heffter.org'
+    },
+    {
+      name: 'Beckley Foundation',
+      type: 'Non-Profit',
+      stage: 'Private',
+      substances: ['LSD', 'Psilocybin', 'DMT'],
+      focus: 'Psychedelic Science and Drug Policy Reform',
+      website: 'https://beckleyfoundation.org'
+    },
+    {
+      name: 'Usona Institute',
+      type: 'Non-Profit',
+      stage: 'Private',
+      substances: ['Psilocybin'],
+      focus: 'Major Depressive Disorder',
+      website: 'https://usonainstitute.org'
     }
   ];
 
@@ -259,6 +496,7 @@ export class CompanyCrawler extends BaseCrawler<Company> {
         let companyData: Partial<Company> = {
           id: this.generateId('co', knownCompany.name.toLowerCase().replace(/\s+/g, '-')),
           name: knownCompany.name,
+          legalName: knownCompany.legalName,
           type: knownCompany.type,
           stage: knownCompany.stage,
           ticker: knownCompany.ticker,

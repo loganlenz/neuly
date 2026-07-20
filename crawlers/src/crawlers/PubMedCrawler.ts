@@ -583,7 +583,28 @@ export class PubMedCrawler extends BaseCrawler<ResearchPaper> {
       'psilocybin neuroimaging fMRI',
       'psychedelic mechanism action',
       'DMT consciousness',
-      'microdosing psychedelics'
+      'microdosing psychedelics',
+      'psilocybin alcohol use disorder',
+      'psilocybin smoking cessation',
+      'psilocybin end-of-life anxiety',
+      'psilocybin anorexia nervosa',
+      'psilocybin OCD',
+      'psilocybin bipolar disorder',
+      'MDMA-assisted therapy PTSD',
+      'MDMA social anxiety autism',
+      'ketamine treatment-resistant depression',
+      'ketamine suicidal ideation',
+      'esketamine nasal spray depression',
+      'LSD cluster headache',
+      'DMT depression',
+      '5-MeO-DMT depression',
+      'ibogaine opioid use disorder',
+      'ibogaine traumatic brain injury',
+      'psychedelic neuroplasticity',
+      'psychedelic default mode network',
+      'psychoplastogen antidepressant',
+      'psychedelic integration therapy',
+      'psychedelic safety adverse events'
     ];
   }
 }

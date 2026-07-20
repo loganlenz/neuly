@@ -123,8 +123,9 @@ npm run enrich:openalex
 
 ### Run the Scheduler
 
-Runs each crawler on its own cadence (trials daily, SEC filings on weekdays,
-jobs daily, PubMed weekly, ...). Override any cadence with `SCHEDULE_<CRAWLER>`.
+Runs each crawler on its own cadence (trials twice daily, SEC filings on
+weekdays, jobs daily, PubMed twice weekly, ...). Override any cadence with
+`SCHEDULE_<CRAWLER>`.
 
 ```bash
 npm run schedule
