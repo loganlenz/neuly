@@ -18,17 +18,21 @@ interface ScheduleEntry {
  * changes — filings and jobs move daily, the literature weekly.
  */
 const DEFAULT_SCHEDULE: ScheduleEntry[] = [
-  { crawler: 'clinicaltrials', cron: '0 6 * * *', description: 'ClinicalTrials.gov — daily 06:00 UTC' },
+  // Clinical trials move fastest — check twice daily so new registrations and
+  // status changes surface within hours, not a day.
+  { crawler: 'clinicaltrials', cron: '0 6,18 * * *', description: 'ClinicalTrials.gov — twice daily 06:00 & 18:00 UTC' },
   { crawler: 'companies', cron: '0 7 * * 1-5', description: 'SEC EDGAR — weekdays 07:00 UTC' },
   { crawler: 'jobs', cron: '30 7 * * *', description: 'ATS job boards — daily 07:30 UTC' },
   { crawler: 'events', cron: '0 8 * * *', description: 'Events — daily 08:00 UTC' },
-  { crawler: 'pubmed', cron: '0 5 * * 1', description: 'PubMed — Mondays 05:00 UTC' },
+  // Literature: PubMed twice a week (Mon & Thu) so new papers land promptly.
+  { crawler: 'pubmed', cron: '0 5 * * 1,4', description: 'PubMed — Mondays & Thursdays 05:00 UTC' },
   { crawler: 'people', cron: '0 5 * * 2', description: 'People — Tuesdays 05:00 UTC' },
   { crawler: 'legislation', cron: '0 9 * * *', description: 'Bills & Federal Register — daily 09:00 UTC' },
   { crawler: 'funding', cron: '30 9 * * 1-5', description: 'SEC Form D filings — weekdays 09:30 UTC' },
   { crawler: 'preprints', cron: '0 10 * * *', description: 'bioRxiv/medRxiv preprints — daily 10:00 UTC' },
   { crawler: 'grants', cron: '0 4 * * 3', description: 'NIH RePORTER grants — Wednesdays 04:00 UTC' },
-  { crawler: 'openalex', cron: '0 3 * * 6', description: 'OpenAlex citation refresh — Saturdays 03:00 UTC' }
+  // Refresh citation counts on stored papers twice a week (Wed & Sat).
+  { crawler: 'openalex', cron: '0 3 * * 3,6', description: 'OpenAlex citation refresh — Wednesdays & Saturdays 03:00 UTC' }
 ];
 
 function scheduleFor(entry: ScheduleEntry): string {
