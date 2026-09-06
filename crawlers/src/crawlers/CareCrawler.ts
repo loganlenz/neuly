@@ -128,9 +128,9 @@ export class CareCrawler extends BaseCrawler<CareProvider> {
     }
 
     return {
-      // Curated rows always succeed; Oregon being down is reported but does
-      // not fail the run (the orchestrator would otherwise record no data).
-      success: true,
+      // success=false with data still present: the orchestrator upserts the
+      // rows but skips removal detection for this run.
+      success: errors.length === 0,
       data: Array.from(providers.values()),
       errors: errors.length > 0 ? errors : undefined,
       stats: {

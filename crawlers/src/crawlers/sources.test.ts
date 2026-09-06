@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { normalizeCompanyName, parseEntityKey, CompanyCrawler } from './CompanyCrawler.js';
 import { FundingCrawler } from './FundingCrawler.js';
 import { isRelevantFederalDocument } from './LegislationCrawler.js';
-import { PeopleCrawler, normalizePersonName } from './PeopleCrawler.js';
+import { PeopleCrawler, normalizePersonName, personKey } from './PeopleCrawler.js';
 import { CareCrawler } from './CareCrawler.js';
 import type { ClinicalTrial, Grant, ResearchPaper } from '../models/types.js';
 
@@ -116,6 +116,8 @@ describe('PeopleCrawler derivation', () => {
     expect(normalizePersonName('Janssen Pharmaceutical K.K., Japan Clinical Trial')).toBe('');
     expect(normalizePersonName('Francisney P Nascimento, 1')).toBe('Francisney P Nascimento');
     expect(normalizePersonName('Ahmed S Abd El Azeem, Residant')).toBe('Ahmed S Abd El Azeem');
+    expect(personKey('Dr. Carlos Zarate')).toBe(personKey('Carlos A Zarate'));
+    expect(personKey('Robin L. Carhart-Harris')).toBe('robin carhart-harris');
 
     const trial: ClinicalTrial = {
       id: 'ct_x', nctId: 'NCT00000009', title: 't', status: 'Recruiting', conditions: ['PTSD'], interventions: [],
@@ -154,6 +156,7 @@ describe('CareCrawler', () => {
     expect(result.success).toBe(true);
     expect(result.data!.length).toBeGreaterThan(10);
     expect(result.data!.every(p => p.verified === false)).toBe(true);
+    expect(result.errors).toBeUndefined();
     expect(result.data!.every(p => p.website?.startsWith('https://'))).toBe(true);
   });
 });

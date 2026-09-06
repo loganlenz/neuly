@@ -27,6 +27,17 @@ export interface PeopleCrawlerOptions {
 /** Degrees and honorifics trailing a name on ClinicalTrials.gov ("Jane Doe, MD, PhD") */
 const CREDENTIALS = /\s*,?\s*\b(m\.?d\.?|ph\.?d\.?|d\.?o\.?|psy\.?d\.?|m\.?p\.?h\.?|m\.?s\.?c?\.?|m\.?a\.?|r\.?n\.?|b\.?sc?\.?|pharm\.?d\.?|f\.?r\.?c\.?p\.?c?\.?|m\.?b\.?b\.?s\.?|dr\.?|prof\.?|professor|associate professor|assistant professor|md-phd|np|pa-c|lcsw|lmft|mph|msc|mba|ms|ma|rn|bsn|dnp|frcpc|frcp|facs|faan)\b\.?/gi;
 
+/**
+ * Matching key for the same person across sources: first + last name only,
+ * so "Carlos Zarate", "Carlos A Zarate" and "Dr. Carlos Zarate" collapse.
+ */
+export function personKey(name: string): string {
+  const normalized = normalizePersonName(name);
+  if (!normalized) return '';
+  const words = normalized.toLowerCase().replace(/\./g, '').split(' ');
+  return words.length === 1 ? words[0] : `${words[0]} ${words[words.length - 1]}`;
+}
+
 /** Strings that are organisations, hotlines or roles rather than people */
 const NOT_A_PERSON = /\b(call|trial|trials|pharmaceutical|pharma|department|dept|clinical|office|contact|team|group|study|site|coordinator|hospital|university|institute|center|centre|clinic|inc|llc|ltd|k\.k\.|foundation|research|services|laborator|assist|resident|residant|student|nurse|investigator|physician|professor|program|committee|unit|division|company|corporation|hotline|information)\b/i;
 
@@ -610,11 +621,11 @@ export class PeopleCrawler extends BaseCrawler<Person> {
 
     // Derived people: investigators, grant PIs, prolific authors. Curated
     // entries win on collisions; derived records carry their evidence.
-    const seen = new Set(people.map(p => normalizePersonName(p.name).toLowerCase()));
+    const seen = new Set(people.map(p => personKey(p.name)));
     const derived = this.derivePeople();
     let added = 0;
     for (const person of derived) {
-      const key = normalizePersonName(person.name || '').toLowerCase();
+      const key = personKey(person.name || '');
       if (!key || seen.has(key)) continue;
       const validated = this.validate({ ...person, crawledAt: this.getTimestamp() });
       if (validated) {
@@ -668,7 +679,7 @@ export class PeopleCrawler extends BaseCrawler<Person> {
     const upsert = (rawName: string, patch: Partial<Person>, evidence: string, source: string, substances: Substance[]) => {
       const name = normalizePersonName(rawName);
       if (!name || name.length > 80) return;
-      const key = name.toLowerCase();
+      const key = personKey(name);
       const current = byName.get(key) ?? {
         id: this.generateId('per', this.slugify(name)),
         name,
@@ -715,7 +726,7 @@ export class PeopleCrawler extends BaseCrawler<Person> {
         const name = normalizePersonName(author.name);
         // PubMed stores "Doe JQ" — an initials-only surname form is not a display name
         if (!name || /^et al/i.test(name) || /\b[A-Z]{1,3}$/.test(name)) continue;
-        const key = name.toLowerCase();
+        const key = personKey(name);
         const entry = authorCounts.get(key) ?? { name, count: 0, affiliation: undefined, substances: new Set<Substance>(), areas: new Map() };
         entry.count++;
         entry.affiliation = entry.affiliation || cleanText(author.affiliation);

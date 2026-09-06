@@ -1,6 +1,6 @@
 import axios, { AxiosInstance, AxiosRequestConfig } from 'axios';
 import pLimit from 'p-limit';
-import pRetry from 'p-retry';
+import pRetry, { AbortError } from 'p-retry';
 import { logger } from '../utils/logger.js';
 import { CrawledData } from '../models/types.js';
 
@@ -104,6 +104,12 @@ export abstract class BaseCrawler<T extends CrawledData> {
                 : 30000;
               logger.warn(`[${this.config.name}] Rate limited (429) on ${url}; waiting ${Math.round(waitMs / 1000)}s before retry`);
               await this.delay(waitMs);
+              throw error;
+            }
+            // Other 4xx responses (404 gone, 400 bad query, 403 blocked) are
+            // deterministic — retrying only burns time against the rate limit.
+            if (axios.isAxiosError(error) && error.response && error.response.status >= 400 && error.response.status < 500) {
+              throw new AbortError(error instanceof Error ? error : new Error(String(error)));
             }
             throw error;
           }

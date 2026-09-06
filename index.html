@@ -797,7 +797,8 @@
         return () => window.removeEventListener('scroll', handleScroll);
       }, []);
 
-      const dataNav = [['research', 'Research'], ['studies', 'Studies'], ['policy', 'Policy'], ['funding', 'Funding'], ['grants', 'Grants'], ['readouts', 'Readouts'], ['companies', 'Companies'], ['people', 'People'], ['care', 'Care'], ['education', 'Education']];
+      const dataNav = [['research', 'Research'], ['studies', 'Studies'], ['policy', 'Policy'], ['funding', 'Funding'], ['grants', 'Grants'], ['readouts', 'Readouts'], ['companies', 'Companies'], ['people', 'People'], ['jobs', 'Jobs'], ['events', 'Events'], ['care', 'Care'], ['education', 'Education']];
+      const [browseOpen, setBrowseOpen] = useState(false);
       const navItems = user ? [['dashboard', 'Dashboard'], ...dataNav] : dataNav;
 
       // Mobile/tablet, signed in: iPhone-app chrome — slim top header with
@@ -817,13 +818,27 @@
       // Mobile/tablet, signed out: slim marketing header
       if (isMobile) {
         return (
+          <>
           <nav style={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 100, padding: 'calc(10px + env(safe-area-inset-top)) 20px 10px', backgroundColor: scrolled ? 'rgba(10, 15, 13, 0.95)' : 'transparent', backdropFilter: scrolled ? 'blur(20px)' : 'none', WebkitBackdropFilter: scrolled ? 'blur(20px)' : 'none', transition: 'all 0.3s', borderBottom: scrolled ? '1px solid rgba(255,255,255,0.06)' : 'none', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <NeulyLogo height={20} onClick={() => setCurrentPage('home')} />
             <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <button onClick={() => setBrowseOpen(!browseOpen)} aria-label="Browse" style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', color: '#e8ebe9', fontSize: '14px', fontWeight: 500, cursor: 'pointer', padding: '9px 12px', borderRadius: '10px' }}>☰ Browse</button>
               <button onClick={() => openAuth('login')} style={{ background: 'transparent', border: 'none', color: '#e8ebe9', fontSize: '14px', fontWeight: 500, cursor: 'pointer', padding: '10px 12px' }}>Log In</button>
               <button onClick={() => openAuth('signup')} style={{ background: '#7dd3c0', border: 'none', color: '#0a0f0d', fontSize: '14px', fontWeight: 600, padding: '10px 18px', borderRadius: '10px', cursor: 'pointer' }}>Join Free</button>
             </div>
           </nav>
+          {browseOpen && (
+            <div onClick={() => setBrowseOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 99, background: 'rgba(5, 8, 7, 0.7)', backdropFilter: 'blur(4px)' }}>
+              <div onClick={e => e.stopPropagation()} style={{ position: 'absolute', top: 'calc(56px + env(safe-area-inset-top))', left: '12px', right: '12px', background: '#141918', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '16px', padding: '10px', maxHeight: '75vh', overflowY: 'auto' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+                  {dataNav.map(([page, label]) => (
+                    <div key={page} onClick={() => { setCurrentPage(page); setBrowseOpen(false); window.scrollTo(0, 0); }} style={{ padding: '12px 14px', borderRadius: '10px', cursor: 'pointer', fontSize: '15px', fontWeight: 500, color: currentPage === page ? '#7dd3c0' : '#e8ebe9', background: currentPage === page ? 'rgba(125,211,192,0.1)' : 'rgba(255,255,255,0.03)' }}>{label}</div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+          </>
         );
       }
 

@@ -124,7 +124,9 @@ export class CrawlerOrchestrator {
 
     this.crawlers.set('people', {
       type: 'people',
-      fullSnapshot: false,
+      // Deterministic over curated list + stored datasets: a full snapshot,
+      // so a renamed or dropped derived person does not linger.
+      fullSnapshot: true,
       run: async () => {
         // Curated figures plus investigators, grant PIs and prolific authors
         // derived from the stored trials, grants and papers.
@@ -139,7 +141,9 @@ export class CrawlerOrchestrator {
 
     this.crawlers.set('care', {
       type: 'care_providers',
-      fullSnapshot: false,
+      // Full snapshot only when every source answered (success flag), so a
+      // regulator feed outage never reads as "all licensed centers closed".
+      fullSnapshot: true,
       run: () => new CareCrawler().crawl()
     });
 

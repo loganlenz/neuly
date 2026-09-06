@@ -333,9 +333,13 @@ export class PubMedCrawler extends BaseCrawler<ResearchPaper> {
    * Extract PMID from article
    */
   private extractPMID(article: PubMedArticle): string {
-    const pmid = article.MedlineCitation?.PMID;
-    if (typeof pmid === 'string') return pmid;
-    if (pmid && typeof pmid === 'object') return pmid['#text'] || '';
+    // The XML parser coerces the numeric PMID text node to a number
+    const pmid = article.MedlineCitation?.PMID as unknown;
+    if (typeof pmid === 'string' || typeof pmid === 'number') return String(pmid);
+    if (pmid && typeof pmid === 'object') {
+      const text = (pmid as { '#text'?: string | number })['#text'];
+      return text === undefined || text === null ? '' : String(text);
+    }
     return '';
   }
 
