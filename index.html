@@ -67,6 +67,7 @@
       border-top: 1px solid rgba(255,255,255,0.1);
       padding: 10px 16px calc(20px + env(safe-area-inset-bottom));
       animation: slideUp 0.22s;
+      max-height: 85vh; overflow-y: auto;
     }
     .neuly-sheet .grabber { width: 40px; height: 4px; border-radius: 2px; background: rgba(255,255,255,0.2); margin: 4px auto 14px; }
     .neuly-sheet-item {
@@ -112,9 +113,12 @@
       [style*="grid-template-columns: repeat(4, 1fr)"],
       [style*="grid-template-columns: repeat(5, 1fr)"] { grid-template-columns: repeat(2, 1fr) !important; }
       [style*="minmax(380px"], [style*="minmax(320px"], [style*="minmax(280px"] { grid-template-columns: 1fr !important; }
-      /* Page gutters */
-      [style*="padding: 0 40px"] { padding: 0 20px !important; }
-      /* Display headings scale down */
+      /* Page gutters (React serializes '0 40px' as '0px 40px') */
+      [style*="padding: 0 40px"], [style*="padding: 0px 40px"] { padding: 0 20px !important; }
+      /* Display headings scale down. The 64px hero title must shrink too —
+         otherwise it overflows a 390px phone and widens the layout viewport,
+         which pushes the fixed bottom tab bar out of view. */
+      [style*="font-size: 64px"] { font-size: 40px !important; }
       [style*="font-size: 52px"] { font-size: 34px !important; }
       [style*="font-size: 48px"] { font-size: 32px !important; }
       [style*="font-size: 42px"] { font-size: 28px !important; }
@@ -230,6 +234,41 @@
       }
     };
 
+    // Build "?a=1&b=2" from an object, dropping empty / "All" values so the
+    // server sees only real filters.
+    const buildQuery = (params) => {
+      const sp = new URLSearchParams();
+      Object.entries(params || {}).forEach(([k, v]) => {
+        if (v === undefined || v === null || v === '' || v === 'All') return;
+        sp.set(k, String(v));
+      });
+      const s = sp.toString();
+      return s ? `?${s}` : '';
+    };
+
+    // Server-side paginated list fetch shared by the Research / Policy /
+    // Funding / Grants pages. Debounces the search box, drops stale
+    // responses, and exposes { rows, total, totalPages, loading, error }.
+    const usePagedQuery = (endpoint, params, { debounceMs = 300 } = {}) => {
+      const [state, setState] = useState({ rows: [], total: 0, totalPages: 1, loading: true, error: null, loaded: false });
+      const key = JSON.stringify(params);
+      useEffect(() => {
+        let cancelled = false;
+        setState(prev => ({ ...prev, loading: true }));
+        const timer = setTimeout(async () => {
+          const res = await api.get(`${endpoint}${buildQuery(params)}`);
+          if (cancelled) return;
+          if (!res || !Array.isArray(res.data)) {
+            setState({ rows: [], total: 0, totalPages: 1, loading: false, error: 'Could not load data from the Neuly API.', loaded: true });
+          } else {
+            setState({ rows: res.data, total: res.total ?? res.data.length, totalPages: res.totalPages || 1, loading: false, error: null, loaded: true });
+          }
+        }, debounceMs);
+        return () => { cancelled = true; clearTimeout(timer); };
+      }, [endpoint, key]);
+      return state;
+    };
+
     // Data Context for sharing API data across components
     const DataContext = createContext(null);
 
@@ -238,7 +277,6 @@
         companies: [],
         people: [],
         clinicalTrials: [],
-        researchPapers: [],
         jobs: [],
         events: [],
         education: [],
@@ -258,11 +296,13 @@
             const dashboard = await api.getDashboard();
             if (!dashboard || !dashboard.counts) throw new Error('API unreachable');
 
-            const [companiesRes, peopleRes, trialsRes, papersRes, jobsRes, eventsRes, educationRes] = await Promise.all([
+            // Research papers are NOT bulk-loaded here — the papers table is
+            // large (abstracts included), so the Research page, the agent and
+            // person profiles query /api/research server-side on demand.
+            const [companiesRes, peopleRes, trialsRes, jobsRes, eventsRes, educationRes] = await Promise.all([
               api.getCompanies({ limit: 1000 }),
               api.getPeople({ limit: 2000 }),
               api.getClinicalTrials({ limit: 3000 }),
-              api.getResearchPapers({ limit: 2000 }),
               api.getJobs({ limit: 1000 }),
               api.getEvents({ limit: 500 }),
               api.getEducation({ limit: 500 })
@@ -273,7 +313,6 @@
               companies: companiesRes?.data || [],
               people: peopleRes?.data || [],
               clinicalTrials: trialsRes?.data || [],
-              researchPapers: papersRes?.data || [],
               jobs: jobsRes?.data || [],
               events: eventsRes?.data || [],
               education: educationRes?.data || [],
@@ -496,8 +535,37 @@
       buttonDark: { padding: '16px 32px', fontSize: '15px', fontWeight: 600, background: '#1a1f1d', color: '#fff', border: 'none', borderRadius: '30px', cursor: 'pointer' },
     };
 
-    const substanceColors = { 'Psilocybin': '#7dd3c0', 'MDMA': '#f0b775', 'Ketamine': '#a8c5e2', 'LSD': '#d4a5c9', 'Ayahuasca': '#98d4a0', 'Ibogaine': '#98d4a0', 'DMT': '#e8c898', '5-MeO-DMT': '#e8c898', 'Mescaline': '#d4a5c9', 'Cannabis': '#e8c898', 'All': '#7dd3c0', 'All Research': '#7dd3c0', 'Multiple': '#a8c5e2' };
+    const substanceColors = { 'Psilocybin': '#7dd3c0', 'MDMA': '#f0b775', 'Ketamine': '#a8c5e2', 'LSD': '#d4a5c9', 'Ayahuasca': '#98d4a0', 'Ibogaine': '#98d4a0', 'DMT': '#e8c898', '5-MeO-DMT': '#e8c898', 'Mescaline': '#d4a5c9', 'Cannabis': '#e8c898', 'Kratom': '#c9b27a', 'Kava': '#8fbf9f', 'Salvia': '#b8a9e0', 'Kanna': '#f0a58f', 'Amanita Muscaria': '#e57373', 'Other': '#6b7370', 'All': '#7dd3c0', 'All Research': '#7dd3c0', 'Multiple': '#a8c5e2' };
     const subColor = (sub) => substanceColors[sub] || '#98d4a0';
+
+    // Small chip used wherever a record lists substances
+    const SubstanceChip = ({ name, size = 11 }) => (
+      <span style={{ padding: size > 11 ? '4px 10px' : '3px 8px', fontSize: `${size}px`, fontWeight: 600, background: `${subColor(name)}20`, color: subColor(name), borderRadius: '4px', whiteSpace: 'nowrap' }}>{name}</span>
+    );
+
+    // Unique, sorted option values from a list of records — every filter
+    // dropdown derives from the loaded data so it never offers a value with
+    // zero matches or misses one that is present.
+    const uniqueSorted = (values) => Array.from(new Set(values.filter(v => v !== undefined && v !== null && v !== '' && v !== '—'))).sort((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true }));
+    const optionsFrom = (records, pick) => ['All', ...uniqueSorted(records.flatMap(r => { const v = pick(r); return Array.isArray(v) ? v : [v]; }))];
+
+    const fmtMoney = (n) => {
+      if (n === undefined || n === null || Number.isNaN(Number(n))) return null;
+      const v = Number(n);
+      if (v >= 1e9) return `$${(v / 1e9).toFixed(v % 1e9 === 0 ? 0 : 2)}B`;
+      if (v >= 1e6) return `$${(v / 1e6).toFixed(v % 1e6 === 0 ? 0 : 1)}M`;
+      if (v >= 1e3) return `$${Math.round(v / 1e3).toLocaleString()}K`;
+      return `$${v.toLocaleString()}`;
+    };
+    const fmtDate = (d) => {
+      if (!d) return null;
+      const date = new Date(/^\d{4}-\d{2}-\d{2}$/.test(d) ? d + 'T12:00:00' : d);
+      return Number.isNaN(date.getTime()) ? d : date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    };
+    const US_STATES = { AL: 'Alabama', AK: 'Alaska', AZ: 'Arizona', AR: 'Arkansas', CA: 'California', CO: 'Colorado', CT: 'Connecticut', DE: 'Delaware', DC: 'District of Columbia', FL: 'Florida', GA: 'Georgia', HI: 'Hawaii', ID: 'Idaho', IL: 'Illinois', IN: 'Indiana', IA: 'Iowa', KS: 'Kansas', KY: 'Kentucky', LA: 'Louisiana', ME: 'Maine', MD: 'Maryland', MA: 'Massachusetts', MI: 'Michigan', MN: 'Minnesota', MS: 'Mississippi', MO: 'Missouri', MT: 'Montana', NE: 'Nebraska', NV: 'Nevada', NH: 'New Hampshire', NJ: 'New Jersey', NM: 'New Mexico', NY: 'New York', NC: 'North Carolina', ND: 'North Dakota', OH: 'Ohio', OK: 'Oklahoma', OR: 'Oregon', PA: 'Pennsylvania', RI: 'Rhode Island', SC: 'South Carolina', SD: 'South Dakota', TN: 'Tennessee', TX: 'Texas', UT: 'Utah', VT: 'Vermont', VA: 'Virginia', WA: 'Washington', WV: 'West Virginia', WI: 'Wisconsin', WY: 'Wyoming', PR: 'Puerto Rico' };
+    const jurisdictionLabel = (j) => j === 'US-Federal' ? 'Federal' : (US_STATES[j] || j);
+    const isPreprint = (p) => Boolean(p && ((p.publicationType || []).some(t => /preprint/i.test(String(t))) || p.isPreprint));
+    const paperUrl = (p) => (p && (p.url || (p.pmid ? `https://pubmed.ncbi.nlm.nih.gov/${p.pmid}` : p.doi ? `https://doi.org/${p.doi}` : null))) || null;
 
     // ============================================================
     // Live-data normalizers — map API records (see crawlers/src/models/types.ts)
@@ -656,17 +724,26 @@
     // everything else lives in the "More" sheet.
     const MOBILE_TABS = [
       ['dashboard', 'Home', '📊'],
-      ['research', 'Research', '🔬'],
+      ['research', 'Research', '📄'],
       ['studies', 'Studies', '🧪'],
       ['care', 'Care', '🏥']
     ];
     const MOBILE_MORE_ITEMS = [
+      ['agent', 'Research Agent', '🧠'],
+      ['policy', 'Policy', '🏛️'],
+      ['funding', 'Funding', '💰'],
+      ['grants', 'Grants', '🎯'],
+      ['readouts', 'Readouts', '🗓️'],
       ['companies', 'Companies', '🏢'],
       ['people', 'People', '👥'],
       ['jobs', 'Jobs', '💼'],
       ['events', 'Events', '📅'],
-      ['education', 'My Courses', '🎓']
+      ['education', 'My Courses', '🎓'],
+      ['account', 'Account', '⚙️']
     ];
+
+    // Every signed-in page (desktop menu, mobile "More" sheet) in one place
+    const USER_MENU_ITEMS = [['dashboard', '📊 Dashboard'], ['account', '⚙️ Account'], ['research', '📄 Research'], ['agent', '🧠 Research Agent'], ['policy', '🏛️ Policy'], ['funding', '💰 Funding'], ['grants', '🎯 Grants'], ['readouts', '🗓️ Readouts'], ['companies', '🏢 Companies'], ['people', '👥 People'], ['jobs', '💼 Jobs'], ['events', '📅 Events'], ['education', '🎓 My Courses'], ['care', '🏥 Care Directory'], ['studies', '🧪 Clinical Studies']];
 
     const MobileTabBar = ({ user, signOut, currentPage, setCurrentPage }) => {
       const [sheetOpen, setSheetOpen] = useState(false);
@@ -720,9 +797,8 @@
         return () => window.removeEventListener('scroll', handleScroll);
       }, []);
 
-      const navItems = user
-        ? [['dashboard', 'Dashboard'], ['research', 'Research'], ['companies', 'Companies'], ['people', 'People'], ['education', 'Education'], ['care', 'Care'], ['studies', 'Studies']]
-        : [['research', 'Research'], ['companies', 'Companies'], ['people', 'People'], ['education', 'Education'], ['care', 'Care'], ['studies', 'Studies']];
+      const dataNav = [['research', 'Research'], ['studies', 'Studies'], ['policy', 'Policy'], ['funding', 'Funding'], ['grants', 'Grants'], ['readouts', 'Readouts'], ['companies', 'Companies'], ['people', 'People'], ['care', 'Care'], ['education', 'Education']];
+      const navItems = user ? [['dashboard', 'Dashboard'], ...dataNav] : dataNav;
 
       // Mobile/tablet, signed in: iPhone-app chrome — slim top header with
       // the page context, tab buttons across the bottom.
@@ -755,9 +831,9 @@
         <nav style={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 100, padding: '16px 0', backgroundColor: scrolled ? 'rgba(10, 15, 13, 0.95)' : 'transparent', backdropFilter: scrolled ? 'blur(20px)' : 'none', transition: 'all 0.3s', borderBottom: scrolled ? '1px solid rgba(255,255,255,0.06)' : 'none' }}>
           <div style={{ maxWidth: '1280px', margin: '0 auto', padding: '0 40px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <NeulyLogo height={24} onClick={() => setCurrentPage(user ? 'dashboard' : 'home')} />
-            <div style={{ display: 'flex', gap: '28px' }}>
+            <div style={{ display: 'flex', gap: '6px 20px', flexWrap: 'wrap', justifyContent: 'center', padding: '0 16px' }}>
               {navItems.map(([page, label]) => (
-                <span key={page} onClick={() => setCurrentPage(page)} style={{ color: currentPage === page ? '#7dd3c0' : '#a0a8a4', fontSize: '14px', fontWeight: 500, cursor: 'pointer', transition: 'color 0.2s' }}>{label}</span>
+                <span key={page} onClick={() => setCurrentPage(page)} style={{ color: currentPage === page ? '#7dd3c0' : '#a0a8a4', fontSize: '14px', fontWeight: 500, cursor: 'pointer', transition: 'color 0.2s', whiteSpace: 'nowrap' }}>{label}</span>
               ))}
             </div>
             <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
@@ -768,9 +844,13 @@
                     <span style={{ color: '#fff', fontSize: '14px', fontWeight: 500 }}>{displayName(user).split(' ')[0]}</span>
                   </div>
                   {menuOpen && (
-                    <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: '8px', width: '220px', background: 'rgba(20,25,23,0.98)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', padding: '8px', animation: 'slideUp 0.2s' }}>
-                      {[['dashboard', '📊 Dashboard'], ['research', '🔬 Research Agent'], ['companies', '🏢 Companies'], ['people', '👥 People'], ['jobs', '💼 Jobs'], ['events', '📅 Events'], ['education', '🎓 My Courses'], ['care', '🏥 Care Directory'], ['studies', '🧪 Clinical Studies']].map(([page, label]) => (
-                        <div key={page} onClick={() => { setCurrentPage(page); setMenuOpen(false); }} style={{ padding: '10px 16px', borderRadius: '8px', cursor: 'pointer', fontSize: '14px', color: '#a0a8a4' }}>{label}</div>
+                    <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: '8px', width: '240px', maxHeight: '80vh', overflowY: 'auto', background: 'rgba(20,25,23,0.98)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', padding: '8px', animation: 'slideUp 0.2s' }}>
+                      <div style={{ padding: '8px 16px 10px', borderBottom: '1px solid rgba(255,255,255,0.06)', marginBottom: '6px' }}>
+                        <div style={{ fontSize: '13px', color: '#fff', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{user.email}</div>
+                        <div style={{ fontSize: '11px', color: '#7dd3c0', textTransform: 'uppercase', letterSpacing: '0.5px', marginTop: '2px' }}>{user.plan || 'free'} plan</div>
+                      </div>
+                      {USER_MENU_ITEMS.map(([page, label]) => (
+                        <div key={page} onClick={() => { setCurrentPage(page); setMenuOpen(false); }} style={{ padding: '9px 16px', borderRadius: '8px', cursor: 'pointer', fontSize: '14px', color: currentPage === page ? '#7dd3c0' : '#a0a8a4' }}>{label}</div>
                       ))}
                       <div style={{ borderTop: '1px solid rgba(255,255,255,0.06)', marginTop: '8px', paddingTop: '8px' }}>
                         <div onClick={() => { signOut(); setMenuOpen(false); }} style={{ padding: '10px 16px', borderRadius: '8px', cursor: 'pointer', fontSize: '14px', color: '#e57373' }}>🚪 Sign Out</div>
@@ -891,18 +971,25 @@
         'Psilocybin': 'Mushroom-derived compound',
         'Ketamine': 'FDA-approved therapy',
         'MDMA': 'PTSD breakthrough therapy',
-        'LSD': 'Classic psychedelic research',
+        'LSD': 'Ergot-derived research compound',
         'Ayahuasca': 'Traditional plant brew',
         'Ibogaine': 'Addiction treatment',
         'Cannabis': 'Cannabinoid research',
-        'DMT': 'Short-acting psychedelic',
+        'DMT': 'Short-acting tryptamine',
         '5-MeO-DMT': 'Fast-acting tryptamine',
-        'Mescaline': 'Cactus-derived compound'
+        'Mescaline': 'Cactus-derived compound',
+        'Kratom': 'Southeast Asian leaf; opioid-receptor alkaloids',
+        'Kava': 'Pacific root; anxiolytic kavalactones',
+        'Salvia': 'Salvia divinorum; kappa-opioid agonist',
+        'Kanna': 'Sceletium tortuosum; serotonin-modulating',
+        'Amanita Muscaria': 'Muscimol mushroom; GABA-A agonist'
       };
+      // Every substance in the taxonomy with a description is listed; the
+      // ones with trials come first, and those with none are shown as
+      // "no trials yet" rather than silently dropped.
       const substances = Object.entries(substanceStats)
-        .filter(([name, count]) => count > 0 && SUBSTANCE_DESCRIPTIONS[name])
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 6)
+        .filter(([name]) => SUBSTANCE_DESCRIPTIONS[name])
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
         .map(([name, count]) => ({ name, count, color: subColor(name), desc: SUBSTANCE_DESCRIPTIONS[name] }));
       if (substances.length === 0) return null;
       return (
@@ -912,17 +999,23 @@
           <p style={sharedStyles.sectionSubtitle}>Browse our comprehensive database of natural medicine research.</p>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '20px' }}>
             {substances.map((sub, i) => (
-              <div key={i} style={{ ...sharedStyles.card, display: 'flex', alignItems: 'center', gap: '20px', cursor: 'pointer' }}>
-                <div style={{ width: '56px', height: '56px', borderRadius: '16px', backgroundColor: `${sub.color}12`, border: `1px solid ${sub.color}40`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <div key={i} style={{ ...sharedStyles.card, display: 'flex', alignItems: 'center', gap: '20px', cursor: 'pointer', opacity: sub.count > 0 ? 1 : 0.6 }}>
+                <div style={{ width: '56px', height: '56px', borderRadius: '16px', backgroundColor: `${sub.color}12`, border: `1px solid ${sub.color}40`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                   <div style={{ width: '16px', height: '16px', borderRadius: '50%', backgroundColor: sub.color }} />
                 </div>
-                <div style={{ flex: 1 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
                   <h3 style={{ fontSize: '18px', fontWeight: 600, color: '#fff', marginBottom: '4px' }}>{sub.name}</h3>
                   <p style={{ fontSize: '14px', color: '#6b7370' }}>{sub.desc}</p>
                 </div>
-                <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontSize: '20px', fontWeight: 600, color: sub.color }}>{sub.count}</div>
-                  <div style={{ fontSize: '12px', color: '#6b7370' }}>studies</div>
+                <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                  {sub.count > 0 ? (
+                    <>
+                      <div style={{ fontSize: '20px', fontWeight: 600, color: sub.color }}>{sub.count}</div>
+                      <div style={{ fontSize: '12px', color: '#6b7370' }}>{sub.count === 1 ? 'study' : 'studies'}</div>
+                    </>
+                  ) : (
+                    <div style={{ fontSize: '12px', color: '#6b7370', padding: '4px 10px', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '12px' }}>no trials yet</div>
+                  )}
                 </div>
               </div>
             ))}
@@ -974,9 +1067,9 @@
                       </div>
                     </div>
                   </div>
-                  <div style={{ display: 'flex', gap: '6px' }}>
+                  <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                     {company.substances.map((sub, j) => (
-                      <span key={j} style={{ padding: '4px 10px', fontSize: '11px', fontWeight: 600, background: `${substanceColors[sub]}15`, color: substanceColors[sub], borderRadius: '4px' }}>{sub}</span>
+                      <span key={j} style={{ padding: '4px 10px', fontSize: '11px', fontWeight: 600, background: `${subColor(sub)}15`, color: subColor(sub), borderRadius: '4px' }}>{sub}</span>
                     ))}
                   </div>
                 </div>
@@ -1096,10 +1189,14 @@
       })();
 
       const quickActions = [
-        { icon: '🔬', label: 'Research Agent', desc: 'AI-powered literature search', page: 'research', color: '#7dd3c0', gradient: 'linear-gradient(135deg, rgba(125,211,192,0.15) 0%, rgba(125,211,192,0.05) 100%)' },
-        { icon: '🏢', label: 'Companies', desc: 'Browse industry companies', page: 'companies', color: '#a8c5e2', gradient: 'linear-gradient(135deg, rgba(168,197,226,0.15) 0%, rgba(168,197,226,0.05) 100%)' },
-        { icon: '👥', label: 'People', desc: 'Connect with leaders', page: 'people', color: '#d4a5c9', gradient: 'linear-gradient(135deg, rgba(212,165,201,0.15) 0%, rgba(212,165,201,0.05) 100%)' },
+        { icon: '🧠', label: 'Research Agent', desc: 'Keyword search across papers & trials', page: 'agent', color: '#7dd3c0', gradient: 'linear-gradient(135deg, rgba(125,211,192,0.15) 0%, rgba(125,211,192,0.05) 100%)' },
+        { icon: '📄', label: 'Research Papers', desc: 'Browse the peer-reviewed literature', page: 'research', color: '#a8c5e2', gradient: 'linear-gradient(135deg, rgba(168,197,226,0.15) 0%, rgba(168,197,226,0.05) 100%)' },
         { icon: '🧪', label: 'Clinical Studies', desc: 'Browse & enroll in studies', page: 'studies', color: '#f0b775', gradient: 'linear-gradient(135deg, rgba(240,183,117,0.15) 0%, rgba(240,183,117,0.05) 100%)' },
+        { icon: '🗓️', label: 'Readout Calendar', desc: 'Expected trial results windows', page: 'readouts', color: '#d4a5c9', gradient: 'linear-gradient(135deg, rgba(212,165,201,0.15) 0%, rgba(212,165,201,0.05) 100%)' },
+        { icon: '🏛️', label: 'Policy Tracker', desc: 'State bills & federal rules', page: 'policy', color: '#c084fc', gradient: 'linear-gradient(135deg, rgba(192,132,252,0.15) 0%, rgba(192,132,252,0.05) 100%)' },
+        { icon: '💰', label: 'Funding', desc: 'SEC Form D filings feed', page: 'funding', color: '#f0b775', gradient: 'linear-gradient(135deg, rgba(240,183,117,0.15) 0%, rgba(240,183,117,0.05) 100%)' },
+        { icon: '🎯', label: 'Grants', desc: 'NIH-funded research awards', page: 'grants', color: '#98d4a0', gradient: 'linear-gradient(135deg, rgba(152,212,160,0.15) 0%, rgba(152,212,160,0.05) 100%)' },
+        { icon: '🏢', label: 'Companies', desc: 'Browse industry companies', page: 'companies', color: '#a8c5e2', gradient: 'linear-gradient(135deg, rgba(168,197,226,0.15) 0%, rgba(168,197,226,0.05) 100%)' },
       ];
 
       const weeklyStats = [
@@ -1122,7 +1219,8 @@
               </div>
               <div style={{ textAlign: 'right' }}>
                 <div style={{ fontSize: '14px', color: '#6b7370', marginBottom: '4px' }}>Member since</div>
-                <div style={{ fontSize: '16px', color: '#a0a8a4', fontWeight: 500 }}>{memberSince}</div>
+                <div style={{ fontSize: '16px', color: '#a0a8a4', fontWeight: 500, marginBottom: '12px' }}>{memberSince}</div>
+                <button onClick={() => setCurrentPage('account')} style={{ ...sharedStyles.buttonOutline, padding: '8px 16px', fontSize: '13px' }}>⚙️ Account · {(user.plan || 'free').replace(/^\w/, c => c.toUpperCase())} plan</button>
               </div>
             </div>
 
@@ -1248,13 +1346,13 @@
       const [selectedSubstance, setSelectedSubstance] = useState('All');
       const [searchQuery, setSearchQuery] = useState('');
 
-      const stages = ['All', 'Public', 'Series C+', 'Series A-B', 'Seed', 'Private', 'Non-Profit'];
-      const types = ['All', 'Biotech', 'Healthcare', 'Technology', 'Research', 'Media', 'Services'];
-      const substances = ['All', 'Psilocybin', 'MDMA', 'Ketamine', 'LSD', 'Ibogaine', 'Multiple'];
-
       const apiData = useApiData();
       const { items: saves, remove: removeSave } = useSaves();
       const companies = (apiData?.companies || []).map(normalizeCompany);
+      // Filter options derive from the loaded companies
+      const stages = optionsFrom(companies, c => c.stage);
+      const types = optionsFrom(companies, c => c.type);
+      const substances = [...optionsFrom(companies, c => c.substances), ...(companies.some(c => c.substances.length > 1) ? ['Multiple'] : [])];
       const companyById = new Map(companies.map(c => [String(c.id), c]));
       const savedCompanies = saves.filter(s => s.entityType === 'company' && s.kind === 'save');
       const followedCompanies = saves.filter(s => s.entityType === 'company' && s.kind === 'follow');
@@ -1426,11 +1524,11 @@
       const [selectedOrg, setSelectedOrg] = useState('All');
       const [searchQuery, setSearchQuery] = useState('');
 
-      const roles = ['All', 'Researcher', 'Executive', 'Clinician', 'Investor', 'Advocate', 'Founder'];
-
       const apiData = useApiData();
       const { items: saves, remove: removeSave } = useSaves();
       const people = (apiData?.people || []).map(normalizePerson);
+      // Role filter options come from the live data
+      const roles = optionsFrom(people, p => p.role);
       const personById = new Map(people.map(p => [String(p.id), p]));
       const savedPeople = saves.filter(s => s.entityType === 'person' && s.kind === 'save');
       const followedPeople = saves.filter(s => s.entityType === 'person' && s.kind === 'follow');
@@ -1719,8 +1817,8 @@
                           <div key={i} style={{ padding: '12px', background: 'rgba(255,255,255,0.02)', borderRadius: '10px' }}>
                             <div style={{ fontSize: '14px', color: '#e8ebe9', marginBottom: '6px', lineHeight: 1.4 }}>{item.title}</div>
                             <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                              <span style={{ fontSize: '12px', color: '#6b7370' }}>{item.date}</span>
-                              <span style={{ padding: '2px 6px', fontSize: '10px', fontWeight: 600, background: 'rgba(125,211,192,0.1)', color: '#7dd3c0', borderRadius: '3px' }}>{item.type}</span>
+                              {item.date && <span style={{ fontSize: '12px', color: '#6b7370' }}>{item.date}</span>}
+                              {item.type && <span style={{ padding: '2px 6px', fontSize: '10px', fontWeight: 600, background: 'rgba(125,211,192,0.1)', color: '#7dd3c0', borderRadius: '3px' }}>{item.type}</span>}
                             </div>
                           </div>
                         ))}
@@ -1764,8 +1862,12 @@
                           <span style={{ padding: '6px 12px', fontSize: '12px', fontWeight: 600, background: `${phaseColors[item.phase]}20`, color: phaseColors[item.phase], borderRadius: '6px', textAlign: 'center' }}>{item.phase}</span>
                           <span style={{ padding: '6px 12px', fontSize: '12px', fontWeight: 600, background: `${statusColors[item.status]}15`, color: statusColors[item.status], borderRadius: '6px', textAlign: 'center' }}>{item.status}</span>
                           <div style={{ textAlign: 'right' }}>
-                            <div style={{ fontSize: '13px', color: '#e8ebe9' }}>{item.expectedCompletion}</div>
-                            <div style={{ fontSize: '11px', color: '#6b7370' }}>Expected</div>
+                            {item.expectedCompletion ? (
+                              <>
+                                <div style={{ fontSize: '13px', color: '#e8ebe9' }}>{item.expectedCompletion}</div>
+                                <div style={{ fontSize: '11px', color: '#6b7370' }}>Expected</div>
+                              </>
+                            ) : null}
                           </div>
                         </div>
                       ))}
@@ -1791,9 +1893,10 @@
                         <div style={{ width: '48px', height: '48px', borderRadius: '12px', background: 'rgba(125,211,192,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px', flexShrink: 0 }}>📰</div>
                         <div style={{ flex: 1 }}>
                           <h4 style={{ fontSize: '16px', fontWeight: 600, color: '#fff', marginBottom: '8px', lineHeight: 1.4 }}>{item.title}</h4>
+                          {item.summary && <p style={{ fontSize: '14px', color: '#a0a8a4', lineHeight: 1.6, marginBottom: '8px' }}>{item.summary}</p>}
                           <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-                            <span style={{ fontSize: '13px', color: '#6b7370' }}>{item.date}</span>
-                            <span style={{ padding: '3px 8px', fontSize: '11px', fontWeight: 600, background: item.type === 'Clinical' ? 'rgba(125,211,192,0.1)' : item.type === 'Regulatory' ? 'rgba(212,165,201,0.1)' : 'rgba(240,183,117,0.1)', color: item.type === 'Clinical' ? '#7dd3c0' : item.type === 'Regulatory' ? '#d4a5c9' : '#f0b775', borderRadius: '4px' }}>{item.type}</span>
+                            {item.date && <span style={{ fontSize: '13px', color: '#6b7370' }}>{item.date}</span>}
+                            {item.type && <span style={{ padding: '3px 8px', fontSize: '11px', fontWeight: 600, background: item.type === 'Clinical' ? 'rgba(125,211,192,0.1)' : item.type === 'Regulatory' ? 'rgba(212,165,201,0.1)' : 'rgba(240,183,117,0.1)', color: item.type === 'Clinical' ? '#7dd3c0' : item.type === 'Regulatory' ? '#d4a5c9' : '#f0b775', borderRadius: '4px' }}>{item.type}</span>}
                           </div>
                         </div>
                         {item.url && <button onClick={() => window.open(item.url, '_blank')} style={{ background: 'transparent', border: 'none', color: '#7dd3c0', fontSize: '14px', cursor: 'pointer' }}>Read →</button>}
@@ -1843,25 +1946,39 @@
     // PERSON PROFILE PAGE
     const PersonProfilePage = ({ person, setCurrentPage, setSelectedCompany }) => {
       const [activeTab, setActiveTab] = useState('overview');
-      const apiData = useApiData();
+
+      // Live publications from /api/research?author=<full name>. The server
+      // matches on the author list; we additionally keep only rows that name
+      // this person's surname so an API without `author` support degrades to
+      // an empty list instead of showing unrelated papers.
+      const cleanName = person ? person.name.replace(/,.*$/, '').split(/\s+/).filter(w => !/^(dr|prof|professor|phd|md|jr|sr)\.?$/i.test(w)).join(' ').trim() : '';
+      const nameParts = cleanName.split(/\s+/).filter(w => w.length > 2);
+      const lastName = (nameParts[nameParts.length - 1] || '').toLowerCase();
+      const [pubState, setPubState] = useState({ loading: true, papers: [] });
+      useEffect(() => {
+        let cancelled = false;
+        if (!cleanName) { setPubState({ loading: false, papers: [] }); return; }
+        setPubState({ loading: true, papers: [] });
+        api.get(`/research${buildQuery({ author: cleanName, limit: 20 })}`).then(res => {
+          if (cancelled) return;
+          const rows = res && Array.isArray(res.data) ? res.data : [];
+          const matched = lastName ? rows.filter(p => (p.authors || []).some(a => (a.name || '').toLowerCase().includes(lastName))) : [];
+          setPubState({
+            loading: false,
+            papers: matched
+              .sort((a, b) => (b.year || 0) - (a.year || 0))
+              .slice(0, 20)
+              .map(p => ({ title: p.title, journal: p.journal || (isPreprint(p) ? 'Preprint' : '—'), year: p.year || '—', citations: p.citationCount || 0, url: paperUrl(p) }))
+          });
+        });
+        return () => { cancelled = true; };
+      }, [cleanName]);
+      const publications = pubState.papers;
 
       if (!person) {
         setCurrentPage('people');
         return null;
       }
-
-      // Live publications: papers in the database whose author list matches
-      // this person's surname. Heuristic, but every result is a real paper.
-      const nameParts = person.name.replace(/,.*$/, '').split(/\s+/)
-        .filter(w => w.length > 2 && !/^(dr|prof|professor|phd|md|jr|sr)\.?$/i.test(w));
-      const lastName = (nameParts[nameParts.length - 1] || '').toLowerCase();
-      const publications = lastName
-        ? (apiData?.researchPapers || [])
-            .filter(p => (p.authors || []).some(a => (a.name || '').toLowerCase().includes(lastName)))
-            .sort((a, b) => (b.year || 0) - (a.year || 0))
-            .slice(0, 10)
-            .map(p => ({ title: p.title, journal: p.journal || (p.isPreprint ? 'Preprint' : '—'), year: p.year || '—', citations: p.citationCount || 0, url: p.url }))
-        : [];
 
       return (
         <div style={{ position: 'relative', zIndex: 1, paddingTop: '100px', minHeight: '100vh' }}>
@@ -1930,7 +2047,8 @@
                       <button onClick={() => setActiveTab('publications')} style={{ background: 'transparent', border: 'none', color: '#7dd3c0', fontSize: '14px', cursor: 'pointer' }}>View All →</button>
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                      {publications.length === 0 && (
+                      {pubState.loading && <p style={{ fontSize: '14px', color: '#6b7370', padding: '8px 0' }}>Searching the papers index…</p>}
+                      {!pubState.loading && publications.length === 0 && (
                         <p style={{ fontSize: '14px', color: '#6b7370', padding: '8px 0' }}>No publications indexed for this person yet — the PubMed crawler links papers by author name as it runs.</p>
                       )}
                       {publications.slice(0, 2).map((pub, i) => (
@@ -1973,7 +2091,8 @@
             {activeTab === 'publications' && (
               <div style={{ ...sharedStyles.card }}>
                 <h3 style={{ fontSize: '20px', fontWeight: 600, color: '#fff', marginBottom: '24px' }}>Publications in the Neuly Database</h3>
-                {publications.length === 0 && (
+                {pubState.loading && <p style={{ fontSize: '14px', color: '#6b7370' }}>Searching the papers index…</p>}
+                {!pubState.loading && publications.length === 0 && (
                   <p style={{ fontSize: '14px', color: '#6b7370' }}>No publications indexed for this person yet — the PubMed crawler links papers by author name as it runs.</p>
                 )}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -2047,13 +2166,15 @@
 
     const ResearchAgentPage = ({ user }) => {
       const apiData = useApiData();
-      const papers = apiData?.researchPapers || [];
       const trials = apiData?.clinicalTrials || [];
-      const paperCount = apiData?.stats?.counts?.researchPapers ?? papers.length;
+      const paperCount = apiData?.stats?.counts?.researchPapers ?? 0;
       const studyCount = apiData?.stats?.counts?.clinicalTrials ?? trials.length;
-      const journalCount = new Set(papers.map(p => p.journal).filter(Boolean)).size;
-      const citationTotal = papers.reduce((sum, p) => sum + (p.citationCount || 0), 0);
-      const fmtK = (n) => n >= 1000 ? `${Math.round(n / 1000)}K` : String(n);
+      const companyCount = apiData?.stats?.counts?.companies ?? 0;
+      const peopleCount = apiData?.stats?.counts?.people ?? 0;
+      // Substances with at least one trial, most-studied first — drives the
+      // focus dropdown and the sidebar quick filters.
+      const substanceStats = apiData?.stats?.substanceStats || {};
+      const activeSubstances = Object.entries(substanceStats).filter(([name, n]) => n > 0 && name !== 'Other').sort((a, b) => b[1] - a[1]).map(([name]) => name);
       const [activeTab, setActiveTab] = useState('chat');
       const [messages, setMessages] = useState([]);
       const [input, setInput] = useState('');
@@ -2081,34 +2202,51 @@
         scrollToBottom();
       }, [messages]);
 
-      const generateResponse = (query) => {
+      // Papers come from the server per query (/api/research?search=…), so
+      // the agent scales with the papers table; trials are ranked locally
+      // from the already-loaded clinical trial set.
+      const generateResponse = async (query) => {
         const focus = agentConfig.focus;
-        const scopedPapers = focus === 'All Research' ? papers : papers.filter(p => (p.substances || []).includes(focus));
         const scopedTrials = focus === 'All Research' ? trials : trials.filter(t => (t.substances || []).includes(focus));
 
-        const paperHits = rankRecords(query, scopedPapers, ['title', 'abstract', 'journal', 'substances']);
+        // The server matches the whole phrase; if that finds nothing, fall
+        // back to the single most specific keyword so multi-word questions
+        // still surface relevant papers.
+        const terms = searchTokens(query);
+        let res = await api.get(`/research${buildQuery({ search: query, substance: focus === 'All Research' ? '' : focus, limit: 50 })}`);
+        let serverPapers = res && Array.isArray(res.data) ? res.data : [];
+        let serverTotal = res?.total ?? serverPapers.length;
+        if (serverPapers.length === 0 && terms.length > 1) {
+          const keyword = terms.slice().sort((a, b) => b.length - a.length)[0];
+          res = await api.get(`/research${buildQuery({ search: keyword, substance: focus === 'All Research' ? '' : focus, limit: 50 })}`);
+          serverPapers = res && Array.isArray(res.data) ? res.data : [];
+          serverTotal = res?.total ?? serverPapers.length;
+        }
+        const ranked = rankRecords(query, serverPapers, ['title', 'abstract', 'journal', 'substances']);
+        const paperHits = ranked.length > 0 ? ranked : serverPapers;
+        const paperTotal = Math.max(serverTotal, paperHits.length);
         const trialHits = rankRecords(query, scopedTrials, ['title', 'briefSummary', 'substances']);
 
         const topN = agentConfig.style === 'concise' ? 3 : 5;
         const sources = paperHits.slice(0, topN).map(p => ({
           title: p.title,
           authors: (p.authors || []).slice(0, 3).map(a => a.name).join(', ') + ((p.authors || []).length > 3 ? ' et al.' : ''),
-          journal: p.journal || (p.isPreprint ? 'Preprint' : 'Journal not listed'),
+          journal: p.journal || (isPreprint(p) ? 'Preprint' : 'Journal not listed'),
           year: p.year || '—',
           citations: p.citationCount || 0,
           substance: (p.substances || [])[0] || 'Multiple',
           abstract: p.abstract,
-          url: p.url
+          url: paperUrl(p)
         }));
 
         const scopeNote = focus === 'All Research' ? '' : ` (focus: ${focus})`;
         const lines = [];
         if (paperHits.length === 0 && trialHits.length === 0) {
-          lines.push(`I searched the live Neuly database${scopeNote} — ${scopedPapers.length.toLocaleString()} papers and ${scopedTrials.length.toLocaleString()} clinical studies — and didn't find records matching “${query}”.`);
+          lines.push(`I searched the live Neuly database${scopeNote} — ${paperCount.toLocaleString()} papers and ${scopedTrials.length.toLocaleString()} clinical studies — and didn't find records matching “${query}”.`);
           lines.push('');
           lines.push('Try different keywords (substance names, conditions, or authors), or broaden the agent focus in the sidebar.');
         } else {
-          lines.push(`I searched the live Neuly database${scopeNote} for “${query}” and found ${paperHits.length.toLocaleString()} matching paper${paperHits.length === 1 ? '' : 's'} and ${trialHits.length.toLocaleString()} matching clinical stud${trialHits.length === 1 ? 'y' : 'ies'}.`);
+          lines.push(`I searched the live Neuly database${scopeNote} for “${query}” and found ${paperTotal.toLocaleString()} matching paper${paperTotal === 1 ? '' : 's'} and ${trialHits.length.toLocaleString()} matching clinical stud${trialHits.length === 1 ? 'y' : 'ies'}.`);
           if (sources.length > 0) {
             lines.push('');
             lines.push(`**Top papers:**`);
@@ -2130,10 +2268,10 @@
           lines.push('Full source details below — open any paper to read the original.');
         }
 
-        return { text: lines.join('\n'), sources: agentConfig.includeCitations ? sources : [], results: paperHits.length + trialHits.length };
+        return { text: lines.join('\n'), sources: agentConfig.includeCitations ? sources : [], results: paperTotal + trialHits.length };
       };
 
-      const handleSend = () => {
+      const handleSend = async () => {
         if (!input.trim() || isTyping) return;
 
         const query = input.trim();
@@ -2141,16 +2279,20 @@
         setInput('');
         setIsTyping(true);
 
-        setTimeout(() => {
-          const response = generateResponse(query);
+        try {
+          const response = await generateResponse(query);
           setMessages(prev => [...prev, { role: 'agent', content: response.text, sources: response.sources }]);
-          setIsTyping(false);
           setQueryHistory(prev => {
             const next = [{ query, time: new Date().toISOString(), results: response.results }, ...prev].slice(0, 25);
             saveLocal(HISTORY_STORAGE_KEY, next);
             return next;
           });
-        }, 600);
+        } catch (err) {
+          console.error('Research agent query failed', err);
+          setMessages(prev => [...prev, { role: 'agent', content: 'I could not reach the Neuly API just now — please try again in a moment.', sources: [] }]);
+        } finally {
+          setIsTyping(false);
+        }
       };
 
       const handleKeyDown = (e) => {
@@ -2187,7 +2329,7 @@
                 onChange={(e) => setAgentConfig(prev => ({ ...prev, focus: e.target.value }))}
                 style={{ width: '100%', padding: '14px 18px', fontSize: '15px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', color: '#fff', outline: 'none', cursor: 'pointer' }}
               >
-                {['All Research', 'Psilocybin', 'MDMA', 'Ketamine', 'LSD', 'Ayahuasca', 'Cannabis'].map(opt => (
+                {['All Research', ...activeSubstances].map(opt => (
                   <option key={opt} value={opt} style={{ background: '#1a1f1d' }}>{opt}</option>
                 ))}
               </select>
@@ -2281,9 +2423,9 @@
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                 {[
                   { value: paperCount.toLocaleString(), label: 'Papers' },
-                  { value: String(journalCount), label: 'Journals' },
                   { value: studyCount.toLocaleString(), label: 'Studies' },
-                  { value: fmtK(citationTotal), label: 'Citations' }
+                  { value: companyCount.toLocaleString(), label: 'Companies' },
+                  { value: peopleCount.toLocaleString(), label: 'People' }
                 ].map((stat, i) => (
                   <div key={i} style={{ padding: '14px', background: 'rgba(255,255,255,0.02)', borderRadius: '12px', textAlign: 'center' }}>
                     <div style={{ fontSize: '18px', fontWeight: 600, color: '#7dd3c0' }}>{stat.value}</div>
@@ -2296,11 +2438,12 @@
             {/* Quick Filters */}
             <div>
               <div style={{ fontSize: '11px', fontWeight: 600, color: '#6b7370', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '16px' }}>Quick Filters</div>
-              {['Psilocybin', 'MDMA', 'Ketamine', 'LSD', 'Ayahuasca'].map(substance => (
+              {activeSubstances.length === 0 && <p style={{ fontSize: '12px', color: '#6b7370' }}>Substance counts appear once the database loads.</p>}
+              {activeSubstances.slice(0, 8).map(substance => (
                 <div key={substance} onClick={() => { setActiveTab('chat'); setInput(`${substance} clinical research`); }} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 0', borderBottom: '1px solid rgba(255,255,255,0.04)', cursor: 'pointer' }}>
-                  <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: substanceColors[substance] || '#7dd3c0' }} />
+                  <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: subColor(substance) }} />
                   <span style={{ fontSize: '13px', color: '#a0a8a4' }}>{substance}</span>
-                  <span style={{ fontSize: '11px', color: '#6b7370', marginLeft: 'auto' }}>{papers.filter(p => (p.substances || []).includes(substance)).length}</span>
+                  <span style={{ fontSize: '11px', color: '#6b7370', marginLeft: 'auto' }} title="clinical studies">{substanceStats[substance]} studies</span>
                 </div>
               ))}
             </div>
@@ -2487,15 +2630,16 @@
       const [selectedLevel, setSelectedLevel] = useState('All');
       const [selectedCategory, setSelectedCategory] = useState('All');
       const apiData = useApiData();
-      const courses = (apiData?.education || []).map(c => ({ ...c, url: c.url || '#' }));
-      const levels = ['All', 'Beginner', 'Intermediate', 'Advanced'];
-      const categories = ['All', 'Therapy', 'Academic', 'Safety'];
+      const courses = apiData?.education || [];
+      // Level / category chips derive from the loaded courses
+      const levels = optionsFrom(courses, c => c.level);
+      const categories = optionsFrom(courses, c => c.category);
       const filtered = courses.filter(c => (selectedLevel === 'All' || c.level === selectedLevel) && (selectedCategory === 'All' || c.category === selectedCategory));
       const levelColors = { Beginner: '#7dd3c0', Intermediate: '#5c6ac4', Advanced: '#f0b775' };
       return (
         <div style={{ position: 'relative', zIndex: 1, paddingTop: '100px', minHeight: '100vh' }}>
           <div style={{ padding: '40px', maxWidth: '1280px', margin: '0 auto' }}>
-            <div style={{ textAlign: 'center', marginBottom: '48px' }}><div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}><NeulyLogo height={32} suffix="edu" /></div><h1 style={{ fontFamily: '"Fraunces", serif', fontSize: '42px', fontWeight: 600, color: '#fff', marginBottom: '12px' }}>Education</h1><p style={{ fontSize: '16px', color: '#6b7370', maxWidth: '600px', margin: '0 auto' }}>Professional training and courses in psychedelic-assisted therapy, research, and harm reduction</p></div>
+            <div style={{ textAlign: 'center', marginBottom: '48px' }}><div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}><NeulyLogo height={32} suffix="edu" /></div><h1 style={{ fontFamily: '"Fraunces", serif', fontSize: '42px', fontWeight: 600, color: '#fff', marginBottom: '12px' }}>Education</h1><p style={{ fontSize: '16px', color: '#6b7370', maxWidth: '600px', margin: '0 auto' }}>Professional training and courses in natural medicine therapy, research, and harm reduction</p></div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', marginBottom: '32px' }}>
               {[{ label: 'Total Courses', value: courses.length, icon: '📚' }, { label: 'Providers', value: new Set(courses.map(c => c.provider)).size, icon: '🏫' }, { label: 'Free Courses', value: courses.filter(c => c.price === 'Free').length, icon: '🎓' }, { label: 'Categories', value: new Set(courses.map(c => c.category)).size, icon: '🏷️' }].map((stat, i) => (<div key={i} style={{ ...sharedStyles.card, textAlign: 'center', padding: '20px' }}><span style={{ fontSize: '24px' }}>{stat.icon}</span><div style={{ fontSize: '28px', fontWeight: 700, color: '#fff', margin: '8px 0 4px' }}>{stat.value}</div><div style={{ fontSize: '12px', color: '#6b7370', textTransform: 'uppercase', letterSpacing: '1px' }}>{stat.label}</div></div>))}
             </div>
@@ -2509,7 +2653,7 @@
               <h3 style={{ fontSize: '18px', fontWeight: 600, color: '#fff', marginBottom: '8px', lineHeight: 1.3 }}>{course.title}</h3>
               <p style={{ fontSize: '13px', color: '#6b7370', marginBottom: '16px', lineHeight: 1.5, flex: 1 }}>{course.description}</p>
               <div style={{ display: 'flex', gap: '16px', marginBottom: '16px', fontSize: '12px', color: '#6b7370' }}><span>🕐 {course.duration}</span><span>🏷️ {course.category}</span></div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '16px' }}><span style={{ fontSize: '22px', fontWeight: 700, color: course.price === 'Free' ? '#7dd3c0' : '#fff' }}>{course.price}</span><button onClick={() => course.url && course.url !== '#' && window.open(course.url, '_blank')} style={{ ...sharedStyles.button, padding: '10px 24px', fontSize: '14px' }}>View Program</button></div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '16px' }}><span style={{ fontSize: '22px', fontWeight: 700, color: course.price === 'Free' ? '#7dd3c0' : '#fff' }}>{course.price}</span><button onClick={() => course.url && window.open(course.url, '_blank')} disabled={!course.url} title={course.url ? undefined : 'No enrollment link on record'} style={{ ...sharedStyles.button, padding: '10px 24px', fontSize: '14px', opacity: course.url ? 1 : 0.5, cursor: course.url ? 'pointer' : 'not-allowed' }}>{course.url ? 'View Program' : 'No Link Yet'}</button></div>
             </div>))}</div>
             {filtered.length === 0 && <div style={{ textAlign: 'center', padding: '60px', color: '#6b7370' }}><p style={{ fontSize: '18px' }}>No courses match your filters</p></div>}
           </div>
@@ -2517,54 +2661,146 @@
       );
     };
 
+    // Care provider records from /api/care (state regulator license rolls +
+    // a curated, verified list) mapped onto the card shape.
+    const CARE_TYPE_COLORS = { 'Clinic': '#5c6ac4', 'Service Center': '#7dd3c0', 'Telehealth': '#a8c5e2', 'Retreat': '#98d4a0', 'Healing Center': '#c084fc', 'Research Center': '#f0b775', 'Other': '#6b7370' };
+    const normalizeProvider = (p) => {
+      const loc = p.location || {};
+      const country = loc.country || null;
+      const region = country && country !== 'United States' && country !== 'USA' && country !== 'US'
+        ? country
+        : (loc.state ? (US_STATES[loc.state] || loc.state) : (country || null));
+      return {
+        id: p.id || p.name,
+        name: p.name,
+        type: p.type || 'Other',
+        substances: p.substances || [],
+        services: p.services || [],
+        city: loc.city, state: loc.state, country, address: loc.address,
+        location: fmtLocation(loc),
+        region,
+        website: p.website ? p.website.replace(/^https?:\/\//, '').replace(/\/$/, '') : null,
+        websiteUrl: p.website ? (/^https?:\/\//.test(p.website) ? p.website : `https://${p.website}`) : null,
+        phone: p.phone || null,
+        acceptsInsurance: p.acceptsInsurance === true,
+        licenseType: p.licenseType || null,
+        licenseNumber: p.licenseNumber || null,
+        licenseStatus: p.licenseStatus || null,
+        verified: Boolean(p.verified),
+        source: p.source || 'Unknown source',
+        sourceUrl: p.sourceUrl || null
+      };
+    };
+
     const CarePage = ({ user }) => {
       const [selectedType, setSelectedType] = useState('All');
       const [selectedRegion, setSelectedRegion] = useState('All');
-      // Curated directory of real providers. No ratings shown — Neuly does
-      // not collect reviews yet, so none are displayed.
-      const providers = [
-        { id: 1, name: 'Mindbloom', type: 'Ketamine Clinic', location: 'New York, USA', region: 'North America', substances: ['Ketamine'], accepting: true, insurance: true, description: 'At-home ketamine therapy with psychiatric evaluation, guided sessions, and integration coaching.', website: 'mindbloom.com' },
-        { id: 2, name: 'Beckley Retreats', type: 'Psilocybin Retreat', location: 'Montego Bay, Jamaica', region: 'Caribbean', substances: ['Psilocybin'], accepting: true, insurance: false, description: 'Evidence-based psilocybin retreat programs combining science and ceremony in a luxury setting.', website: 'beckleyretreats.com' },
-        { id: 3, name: 'Field Trip Health', type: 'Ketamine Clinic', location: 'Toronto, Canada', region: 'North America', substances: ['Ketamine'], accepting: true, insurance: false, description: 'Ketamine-enhanced psychotherapy in modern clinic settings with experienced therapists.', website: 'fieldtriphealth.com' },
-        { id: 4, name: 'Nushama', type: 'Ketamine Clinic', location: 'Manhattan, USA', region: 'North America', substances: ['Ketamine'], accepting: true, insurance: false, description: 'Premium ketamine wellness center offering IV infusions and psychedelic-assisted therapy in NYC.', website: 'nushama.com' },
-        { id: 5, name: 'Synthesis Institute', type: 'Psilocybin Retreat', location: 'Amsterdam, Netherlands', region: 'Europe', substances: ['Psilocybin (Truffles)'], accepting: true, insurance: false, description: 'Legal psilocybin truffle ceremonies in a research-informed, group retreat format in the Netherlands.', website: 'synthesisretreat.com' },
-        { id: 6, name: 'Numinus Wellness', type: 'Integrative Clinic', location: 'Vancouver, Canada', region: 'North America', substances: ['Ketamine', 'MDMA (trial)'], accepting: true, insurance: true, description: 'Integrative mental health clinic offering ketamine therapy and participating in MDMA clinical trials.', website: 'numinus.com' },
-        { id: 7, name: 'MyDelica', type: 'Psilocybin Retreat', location: 'Cascais, Portugal', region: 'Europe', substances: ['Psilocybin (Truffles)'], accepting: true, insurance: false, description: 'Personalized psilocybin retreat experiences with clinical preparation and integration support in Portugal.', website: 'mydelica.com' },
-        { id: 8, name: 'Klarisana', type: 'Ketamine Clinic', location: 'Austin, USA', region: 'North America', substances: ['Ketamine'], accepting: true, insurance: true, description: 'Multi-location ketamine clinic specializing in treatment-resistant depression, PTSD, and chronic pain.', website: 'klarisana.com' },
-        { id: 9, name: 'Silo Wellness', type: 'Psilocybin Retreat', location: 'Oaxaca, Mexico', region: 'Latin America', substances: ['Psilocybin'], accepting: true, insurance: false, description: 'Culturally respectful psilocybin retreats integrating indigenous Mazatec traditions with modern therapy.', website: 'silowellness.com' },
-        { id: 10, name: 'Innerwell', type: 'Ketamine Clinic', location: 'Los Angeles, USA', region: 'North America', substances: ['Ketamine'], accepting: true, insurance: false, description: 'Telehealth ketamine therapy combining at-home sublingual ketamine with virtual therapist sessions.', website: 'innerwell.com' },
-        { id: 11, name: 'Tandava Retreats', type: 'Ayahuasca Retreat', location: 'Iquitos, Peru', region: 'Latin America', substances: ['Ayahuasca'], accepting: true, insurance: false, description: 'Traditional ayahuasca ceremonies with Shipibo healers in the Peruvian Amazon with medical screening.', website: 'tandavaretreats.com' },
-        { id: 12, name: 'Novamind', type: 'Integrative Clinic', location: 'Salt Lake City, USA', region: 'North America', substances: ['Ketamine', 'Spravato'], accepting: true, insurance: true, description: 'Network of mental health clinics offering ketamine, Spravato, and psychedelic-assisted therapy research.', website: 'novamind.ca' }
+      const [selectedSubstance, setSelectedSubstance] = useState('All');
+      const [searchQuery, setSearchQuery] = useState('');
+
+      // Live directory: null = API unreachable, [] = nothing indexed yet.
+      // There is deliberately no static fallback list.
+      const [care, setCare] = useState({ loading: true, rows: null });
+      useEffect(() => {
+        let cancelled = false;
+        api.get(`/care${buildQuery({ limit: 200 })}`).then(res => {
+          if (cancelled) return;
+          setCare({ loading: false, rows: res && Array.isArray(res.data) ? res.data : null });
+        });
+        return () => { cancelled = true; };
+      }, []);
+
+      const providers = (care.rows || []).map(normalizeProvider);
+      // Filter options derive from the fetched providers
+      const types = optionsFrom(providers, p => p.type);
+      const regions = optionsFrom(providers, p => p.region);
+      const substances = optionsFrom(providers, p => p.substances);
+      const q = searchQuery.trim().toLowerCase();
+      const filtered = providers.filter(p =>
+        (selectedType === 'All' || p.type === selectedType) &&
+        (selectedRegion === 'All' || p.region === selectedRegion) &&
+        (selectedSubstance === 'All' || p.substances.includes(selectedSubstance)) &&
+        (q === '' || p.name.toLowerCase().includes(q) || p.location.toLowerCase().includes(q) || p.services.some(s => s.toLowerCase().includes(q)))
+      );
+      const typeColor = (t) => CARE_TYPE_COLORS[t] || '#5c6ac4';
+      const chip = (active, activeBg, activeColor) => ({ padding: '8px 20px', borderRadius: '20px', border: active ? 'none' : '1px solid rgba(255,255,255,0.1)', background: active ? activeBg : 'transparent', color: active ? activeColor : '#6b7370', cursor: 'pointer', fontSize: '14px', fontWeight: 500 });
+
+      const stats = [
+        { label: 'Providers', value: providers.length, icon: '🏥' },
+        { label: 'Regions', value: new Set(providers.map(p => p.region).filter(Boolean)).size, icon: '🌍' },
+        { label: 'Licensed', value: providers.filter(p => p.licenseNumber).length, icon: '📜' },
+        { label: 'Accept Insurance', value: providers.filter(p => p.acceptsInsurance).length, icon: '🛡️' }
       ];
-      const types = ['All', 'Ketamine Clinic', 'Psilocybin Retreat', 'Integrative Clinic', 'Ayahuasca Retreat'];
-      const regions = ['All', 'North America', 'Europe', 'Caribbean', 'Latin America'];
-      const filtered = providers.filter(p => (selectedType === 'All' || p.type === selectedType) && (selectedRegion === 'All' || p.region === selectedRegion));
-      const typeColors = { 'Ketamine Clinic': '#5c6ac4', 'Psilocybin Retreat': '#7dd3c0', 'Integrative Clinic': '#f0b775', 'Ayahuasca Retreat': '#c084fc' };
+
       return (
         <div style={{ position: 'relative', zIndex: 1, paddingTop: '100px', minHeight: '100vh' }}>
           <div style={{ padding: '40px', maxWidth: '1280px', margin: '0 auto' }}>
-            <div style={{ textAlign: 'center', marginBottom: '48px' }}><div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}><NeulyLogo height={32} suffix="care" /></div><h1 style={{ fontFamily: '"Fraunces", serif', fontSize: '42px', fontWeight: 600, color: '#fff', marginBottom: '12px' }}>Care Directory</h1><p style={{ fontSize: '16px', color: '#6b7370', maxWidth: '600px', margin: '0 auto' }}>Find trusted psychedelic therapy clinics, retreat centers, and integrative care providers worldwide</p></div>
+            <div style={{ textAlign: 'center', marginBottom: '48px' }}><div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}><NeulyLogo height={32} suffix="care" /></div><h1 style={{ fontFamily: '"Fraunces", serif', fontSize: '42px', fontWeight: 600, color: '#fff', marginBottom: '12px' }}>Care Directory</h1><p style={{ fontSize: '16px', color: '#6b7370', maxWidth: '600px', margin: '0 auto' }}>Find licensed natural medicine clinics, service centers, telehealth programs, and retreat centers — sourced from state regulators and verified listings</p></div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', marginBottom: '32px' }}>
-              {[{ label: 'Providers', value: providers.length, icon: '🏥' }, { label: 'Countries', value: new Set(providers.map(p => p.location.split(', ').pop())).size, icon: '🌍' }, { label: 'Care Types', value: new Set(providers.map(p => p.type)).size, icon: '🧭' }, { label: 'Accept Insurance', value: providers.filter(p => p.insurance).length, icon: '🛡️' }].map((stat, i) => (<div key={i} style={{ ...sharedStyles.card, textAlign: 'center', padding: '20px' }}><span style={{ fontSize: '24px' }}>{stat.icon}</span><div style={{ fontSize: '28px', fontWeight: 700, color: '#fff', margin: '8px 0 4px' }}>{stat.value}</div><div style={{ fontSize: '12px', color: '#6b7370', textTransform: 'uppercase', letterSpacing: '1px' }}>{stat.label}</div></div>))}
+              {stats.map((stat, i) => (<div key={i} style={{ ...sharedStyles.card, textAlign: 'center', padding: '20px' }}><span style={{ fontSize: '24px' }}>{stat.icon}</span><div style={{ fontSize: '28px', fontWeight: 700, color: '#fff', margin: '8px 0 4px' }}>{care.loading ? '…' : stat.value}</div><div style={{ fontSize: '12px', color: '#6b7370', textTransform: 'uppercase', letterSpacing: '1px' }}>{stat.label}</div></div>))}
             </div>
-            <div style={{ display: 'flex', gap: '12px', marginBottom: '32px', flexWrap: 'wrap' }}>
-              {types.map(t => (<button key={t} onClick={() => setSelectedType(t)} style={{ padding: '8px 20px', borderRadius: '20px', border: selectedType === t ? 'none' : '1px solid rgba(255,255,255,0.1)', background: selectedType === t ? '#5c6ac4' : 'transparent', color: selectedType === t ? '#fff' : '#6b7370', cursor: 'pointer', fontSize: '14px', fontWeight: 500 }}>{t}</button>))}
-              <div style={{ width: '1px', background: 'rgba(255,255,255,0.1)', margin: '0 8px' }} />
-              {regions.map(r => (<button key={r} onClick={() => setSelectedRegion(r)} style={{ padding: '8px 20px', borderRadius: '20px', border: selectedRegion === r ? 'none' : '1px solid rgba(255,255,255,0.1)', background: selectedRegion === r ? '#7dd3c0' : 'transparent', color: selectedRegion === r ? '#0a0f0d' : '#6b7370', cursor: 'pointer', fontSize: '14px', fontWeight: 500 }}>{r}</button>))}
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '24px' }}>{filtered.map(p => (<div key={p.id} style={{ ...sharedStyles.card }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
-                <div><h3 style={{ fontSize: '20px', fontWeight: 600, color: '#fff', marginBottom: '6px' }}>{p.name}</h3><span style={{ fontSize: '12px', padding: '4px 10px', borderRadius: '12px', background: `${typeColors[p.type] || '#5c6ac4'}22`, color: typeColors[p.type] || '#5c6ac4', fontWeight: 600 }}>{p.type}</span></div>
-                <a href={`https://${p.website}`} target="_blank" rel="noopener noreferrer" style={{ fontSize: '13px', color: '#7dd3c0', textDecoration: 'none', fontWeight: 500 }}>{p.website} ↗</a>
+
+            {providers.length > 0 && (
+              <>
+                <div style={{ display: 'flex', gap: '12px', marginBottom: '16px', flexWrap: 'wrap', alignItems: 'center' }}>
+                  {types.map(t => (<button key={t} onClick={() => setSelectedType(t)} style={chip(selectedType === t, '#5c6ac4', '#fff')}>{t === 'All' ? 'All Types' : t}</button>))}
+                  <div style={{ width: '1px', alignSelf: 'stretch', background: 'rgba(255,255,255,0.1)', margin: '0 8px' }} />
+                  {regions.map(r => (<button key={r} onClick={() => setSelectedRegion(r)} style={chip(selectedRegion === r, '#7dd3c0', '#0a0f0d')}>{r === 'All' ? 'All Regions' : r}</button>))}
+                </div>
+                <div style={{ display: 'flex', gap: '16px', marginBottom: '32px', flexWrap: 'wrap', alignItems: 'center' }}>
+                  <input type="text" placeholder="Search providers, cities, services..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} style={{ flex: 1, minWidth: '250px', padding: '14px 18px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', color: '#fff', fontSize: '14px', outline: 'none' }} />
+                  <select value={selectedSubstance} onChange={(e) => setSelectedSubstance(e.target.value)} style={{ padding: '14px 18px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', color: '#a0a8a4', fontSize: '14px', minWidth: '160px' }}>
+                    {substances.map(s => <option key={s} value={s}>{s === 'All' ? 'All Substances' : s}</option>)}
+                  </select>
+                  <span style={{ fontSize: '14px', color: '#6b7370' }}>{filtered.length} of {providers.length} providers</span>
+                </div>
+              </>
+            )}
+
+            {care.loading && (
+              <div style={{ textAlign: 'center', padding: '60px', color: '#6b7370' }}><p style={{ fontSize: '16px' }}>Loading the care directory…</p></div>
+            )}
+            {!care.loading && care.rows === null && (
+              <div style={{ textAlign: 'center', padding: '80px 40px' }}>
+                <div style={{ fontSize: '48px', marginBottom: '16px' }}>🏥</div>
+                <h3 style={{ fontSize: '20px', fontWeight: 600, color: '#fff', marginBottom: '8px' }}>Care directory unavailable</h3>
+                <p style={{ fontSize: '15px', color: '#6b7370', maxWidth: '460px', margin: '0 auto' }}>The provider directory could not be loaded from the Neuly API. Nothing is shown here that isn't backed by a real, sourced record — please try again shortly.</p>
               </div>
-              <p style={{ fontSize: '13px', color: '#6b7370', marginBottom: '16px', lineHeight: 1.5 }}>{p.description}</p>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '16px' }}>{p.substances.map(s => (<span key={s} style={{ fontSize: '11px', padding: '3px 8px', borderRadius: '8px', background: 'rgba(125,211,192,0.1)', color: '#7dd3c0' }}>{s}</span>))}</div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '16px' }}>
-                <div style={{ display: 'flex', gap: '16px', fontSize: '12px', color: '#6b7370' }}><span>📍 {p.location}</span>{p.insurance && <span style={{ color: '#7dd3c0' }}>✓ Insurance</span>}</div>
-                <div style={{ display: 'flex', gap: '8px' }}>{p.accepting && <span style={{ fontSize: '11px', padding: '4px 10px', borderRadius: '12px', background: 'rgba(125,211,192,0.15)', color: '#7dd3c0', fontWeight: 500 }}>Accepting Patients</span>}<button onClick={() => window.open(`https://${p.website}`, '_blank')} style={{ ...sharedStyles.button, padding: '8px 20px', fontSize: '13px' }}>Visit Site</button></div>
+            )}
+            {!care.loading && care.rows !== null && providers.length === 0 && (
+              <div style={{ textAlign: 'center', padding: '80px 40px' }}>
+                <div style={{ fontSize: '48px', marginBottom: '16px' }}>🌱</div>
+                <h3 style={{ fontSize: '20px', fontWeight: 600, color: '#fff', marginBottom: '8px' }}>No providers indexed yet</h3>
+                <p style={{ fontSize: '15px', color: '#6b7370', maxWidth: '460px', margin: '0 auto' }}>The care crawler hasn't published any licensed or verified providers yet. Listings appear here as regulator license rolls are ingested.</p>
+              </div>
+            )}
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '24px' }}>{filtered.map(p => (<div key={p.id} style={{ ...sharedStyles.card, display: 'flex', flexDirection: 'column' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', marginBottom: '12px' }}>
+                <div style={{ minWidth: 0 }}>
+                  <h3 style={{ fontSize: '20px', fontWeight: 600, color: '#fff', marginBottom: '8px' }}>{p.name}</h3>
+                  <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: '12px', padding: '4px 10px', borderRadius: '12px', background: `${typeColor(p.type)}22`, color: typeColor(p.type), fontWeight: 600 }}>{p.type}</span>
+                    {p.licenseNumber && <span title={`${p.licenseType || 'License'} #${p.licenseNumber}${p.licenseStatus ? ` · ${p.licenseStatus}` : ''}`} style={{ fontSize: '12px', padding: '4px 10px', borderRadius: '12px', background: 'rgba(125,211,192,0.15)', color: '#7dd3c0', fontWeight: 600 }}>📜 Licensed{p.licenseStatus && !/active|current|valid/i.test(p.licenseStatus) ? ` · ${p.licenseStatus}` : ''}</span>}
+                    {p.verified && <span style={{ fontSize: '12px', padding: '4px 10px', borderRadius: '12px', background: 'rgba(168,197,226,0.15)', color: '#a8c5e2', fontWeight: 600 }}>✓ Verified</span>}
+                  </div>
+                </div>
+                {p.websiteUrl && <a href={p.websiteUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: '13px', color: '#7dd3c0', textDecoration: 'none', fontWeight: 500, flexShrink: 0, maxWidth: '45%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.website} ↗</a>}
+              </div>
+              {p.services.length > 0 && <p style={{ fontSize: '13px', color: '#a0a8a4', marginBottom: '12px', lineHeight: 1.5 }}>{p.services.join(' · ')}</p>}
+              {p.substances.length > 0 && <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '16px' }}>{p.substances.map(s => <SubstanceChip key={s} name={s} />)}</div>}
+              <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap', fontSize: '12px', color: '#6b7370', marginBottom: '16px' }}>
+                <span>📍 {p.address ? `${p.address}, ` : ''}{p.location}</span>
+                {p.phone && <span>📞 {p.phone}</span>}
+                {p.acceptsInsurance && <span style={{ color: '#7dd3c0' }}>✓ Accepts insurance</span>}
+                {p.licenseNumber && <span>{p.licenseType || 'License'} #{p.licenseNumber}</span>}
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '14px', marginTop: 'auto' }}>
+                <span style={{ fontSize: '12px', color: '#4a524e', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Source: {p.sourceUrl ? <a href={p.sourceUrl} target="_blank" rel="noopener noreferrer" style={{ color: '#6b7370', textDecoration: 'none' }}>{p.source} ↗</a> : p.source}</span>
+                {p.websiteUrl && <button onClick={() => window.open(p.websiteUrl, '_blank')} style={{ ...sharedStyles.button, padding: '8px 20px', fontSize: '13px', flexShrink: 0 }}>Visit Site</button>}
               </div>
             </div>))}</div>
-            {filtered.length === 0 && <div style={{ textAlign: 'center', padding: '60px', color: '#6b7370' }}><p style={{ fontSize: '18px' }}>No providers match your filters</p></div>}
+            {!care.loading && providers.length > 0 && filtered.length === 0 && <div style={{ textAlign: 'center', padding: '60px', color: '#6b7370' }}><p style={{ fontSize: '18px' }}>No providers match your filters</p></div>}
           </div>
         </div>
       );
@@ -2577,15 +2813,15 @@
       const [searchQuery, setSearchQuery] = useState('');
       const apiData = useApiData();
 
-      const substanceFilters = ['All', 'Psilocybin', 'MDMA', 'Ketamine', 'LSD', 'DMT', 'Ibogaine'];
-      const phaseFilters = ['All', 'Phase 1', 'Phase 2', 'Phase 3'];
-      const statusFilters = ['All', 'Recruiting', 'Active', 'Completed'];
-
       const studies = (apiData?.clinicalTrials || []).map(normalizeStudy);
+      // Substance / phase / status options derive from the loaded trials
+      const substanceFilters = optionsFrom(studies, s => s.substance);
+      const phaseFilters = optionsFrom(studies, s => s.phase);
+      const statusFilters = optionsFrom(studies, s => s.status);
 
       const filteredStudies = studies.filter(s =>
         (selectedSubstance === 'All' || s.substance === selectedSubstance) &&
-        (selectedPhase === 'All' || s.phase.includes(selectedPhase.replace('Phase ', ''))) &&
+        (selectedPhase === 'All' || s.phase === selectedPhase) &&
         (selectedStatus === 'All' || s.status === selectedStatus) &&
         (searchQuery === '' || s.title.toLowerCase().includes(searchQuery.toLowerCase()) || s.sponsor.toLowerCase().includes(searchQuery.toLowerCase()))
       );
@@ -2598,11 +2834,11 @@
                 <NeulyLogo height={32} suffix="studies" />
               </div>
               <h1 style={{ fontFamily: '"Fraunces", serif', fontSize: '42px', fontWeight: 600, color: '#fff', marginBottom: '12px' }}>Clinical Studies</h1>
-              <p style={{ fontSize: '18px', color: '#a0a8a4', maxWidth: '600px', margin: '0 auto' }}>Discover and enroll in psychedelic medicine research studies</p>
+              <p style={{ fontSize: '18px', color: '#a0a8a4', maxWidth: '600px', margin: '0 auto' }}>Discover and enroll in natural medicine research studies</p>
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '20px', marginBottom: '40px' }}>
-              {[{ value: studies.length, label: 'Active Studies', color: '#7dd3c0' }, { value: studies.filter(s => s.status === 'Recruiting').length, label: 'Recruiting', color: '#f0b775' }, { value: studies.filter(s => s.phase.includes('3')).length, label: 'Phase 3', color: '#a8c5e2' }, { value: studies.reduce((sum, s) => sum + (s.enrollment || 0), 0).toLocaleString(), label: 'Total Enrollment', color: '#d4a5c9' }].map((stat, i) => (
+              {[{ value: studies.length, label: 'Studies Indexed', color: '#7dd3c0' }, { value: studies.filter(s => s.status === 'Recruiting').length, label: 'Recruiting', color: '#f0b775' }, { value: studies.filter(s => s.phase.includes('3')).length, label: 'Phase 3', color: '#a8c5e2' }, { value: studies.reduce((sum, s) => sum + (s.enrollment || 0), 0).toLocaleString(), label: 'Total Enrollment', color: '#d4a5c9' }].map((stat, i) => (
                 <div key={i} style={{ ...sharedStyles.card, textAlign: 'center' }}>
                   <div style={{ fontFamily: '"Fraunces", serif', fontSize: '32px', fontWeight: 600, color: stat.color }}>{stat.value}</div>
                   <div style={{ fontSize: '14px', color: '#6b7370' }}>{stat.label}</div>
@@ -2659,11 +2895,14 @@
       const [selectedLocation, setSelectedLocation] = useState('All');
       const [searchQuery, setSearchQuery] = useState('');
 
-      const jobTypes = ['All', 'Research', 'Clinical', 'Business', 'Engineering', 'Policy', 'Marketing'];
-      const locations = ['All', 'Remote', 'United States', 'United Kingdom', 'Canada', 'Germany', 'Australia'];
-
       const apiData = useApiData();
       const jobs = (apiData?.jobs || []).map(normalizeJob);
+      // Type / location options derive from the loaded postings. Location
+      // is the trailing country segment of the formatted location string,
+      // plus "Remote" when any posting is remote.
+      const jobTypes = optionsFrom(jobs, j => j.type);
+      const countryOf = (j) => { const parts = j.location.split(', ').filter(p => p && p !== 'Remote'); return parts.length ? parts[parts.length - 1] : null; };
+      const locations = [...(jobs.some(j => /remote/i.test(j.location)) ? ['All', 'Remote'] : ['All']), ...optionsFrom(jobs, countryOf).slice(1)];
 
       const filteredJobs = jobs.filter(j => 
         (selectedType === 'All' || j.type === selectedType) &&
@@ -2679,7 +2918,7 @@
                 <NeulyLogo height={32} suffix="jobs" />
               </div>
               <h1 style={{ fontFamily: '"Fraunces", serif', fontSize: '42px', fontWeight: 600, color: '#fff', marginBottom: '12px' }}>Industry Jobs</h1>
-              <p style={{ fontSize: '18px', color: '#a0a8a4', maxWidth: '600px', margin: '0 auto' }}>Find your next role in the natural medicine and psychedelic industry.</p>
+              <p style={{ fontSize: '18px', color: '#a0a8a4', maxWidth: '600px', margin: '0 auto' }}>Find your next role in the natural medicine industry.</p>
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '20px', marginBottom: '40px' }}>
@@ -2747,11 +2986,11 @@
       const [selectedType, setSelectedType] = useState('All');
       const [selectedFormat, setSelectedFormat] = useState('All');
 
-      const eventTypes = ['All', 'Conference', 'Webinar', 'Workshop', 'Summit', 'Meetup'];
-      const formats = ['All', 'In-Person', 'Virtual', 'Hybrid'];
-
       const apiData = useApiData();
       const events = (apiData?.events || []).map(normalizeEvent);
+      // Type / format options derive from the loaded events
+      const eventTypes = optionsFrom(events, e => e.type);
+      const formats = optionsFrom(events, e => e.format);
 
       const filteredEvents = events.filter(e => 
         (selectedType === 'All' || e.type === selectedType) &&
@@ -2858,6 +3097,776 @@
       );
     };
 
+    // ============================================================
+    // App-level UI context — lets any page open the auth modal, navigate,
+    // or hand a pre-filled alert to the Account page.
+    // ============================================================
+    const AppUIContext = createContext({ user: null, openAuth: () => {}, setCurrentPage: () => {}, requestAlert: () => {} });
+    const useAppUI = () => useContext(AppUIContext);
+
+    const ALERT_ENTITY_TYPES = [
+      ['clinical_trials', 'Clinical trials'], ['research_papers', 'Research papers'], ['companies', 'Companies'], ['people', 'People'],
+      ['jobs', 'Jobs'], ['events', 'Events'], ['legislation', 'Legislation'], ['funding_events', 'Funding events'], ['grants', 'Grants']
+    ];
+    const EXPORT_TYPES = [...ALERT_ENTITY_TYPES, ['educational_resources', 'Educational resources'], ['care_providers', 'Care providers']];
+    const entityLabel = (t) => (ALERT_ENTITY_TYPES.find(([k]) => k === t) || [t, (t || 'All datasets').replace(/_/g, ' ')])[1];
+    const isPaidPlan = (user) => Boolean(user && (user.plan === 'pro' || user.plan === 'enterprise'));
+
+    // "Create alert for this" — pre-fills the Account page alert form with
+    // the current search keyword and dataset. Signed-out clicks open login.
+    const AlertButton = ({ entityType, keyword, style }) => {
+      const { requestAlert } = useAppUI();
+      const kw = (keyword || '').trim();
+      return (
+        <button onClick={() => requestAlert(entityType, kw)} title="Get an email when new records match" style={{ ...sharedStyles.buttonOutline, padding: '10px 18px', fontSize: '13px', whiteSpace: 'nowrap', ...style }}>
+          🔔 Create alert{kw ? ` for “${kw.length > 24 ? kw.slice(0, 24) + '…' : kw}”` : ' for this'}
+        </button>
+      );
+    };
+
+    // ---- shared page primitives (match the existing pages' look) ----
+    const PageHeader = ({ suffix, title, subtitle, children }) => (
+      <div style={{ textAlign: 'center', marginBottom: '40px' }}>
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}><NeulyLogo height={32} suffix={suffix} /></div>
+        <h1 style={{ fontFamily: '"Fraunces", serif', fontSize: '42px', fontWeight: 600, color: '#fff', marginBottom: '12px' }}>{title}</h1>
+        <p style={{ fontSize: '18px', color: '#a0a8a4', maxWidth: '640px', margin: '0 auto', lineHeight: 1.6 }}>{subtitle}</p>
+        {children}
+      </div>
+    );
+    const StatTiles = ({ stats }) => (
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '20px', marginBottom: '40px' }}>
+        {stats.map((stat, i) => (
+          <div key={i} style={{ ...sharedStyles.card, textAlign: 'center' }}>
+            <div style={{ fontFamily: '"Fraunces", serif', fontSize: '32px', fontWeight: 600, color: stat.color || '#7dd3c0' }}>{stat.value}</div>
+            <div style={{ fontSize: '14px', color: '#6b7370' }}>{stat.label}</div>
+          </div>
+        ))}
+      </div>
+    );
+    const filterInputStyle = { flex: 1, minWidth: '250px', padding: '14px 18px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', color: '#fff', fontSize: '14px', outline: 'none', fontFamily: '"DM Sans", sans-serif' };
+    const filterSelectStyle = { padding: '14px 18px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', color: '#a0a8a4', fontSize: '14px', minWidth: '150px', fontFamily: '"DM Sans", sans-serif' };
+    const FilterSelect = ({ value, onChange, options, allLabel, labelFor = (v) => v }) => (
+      <select value={value} onChange={(e) => onChange(e.target.value)} style={filterSelectStyle}>
+        {options.map(o => <option key={o} value={o}>{o === 'All' ? allLabel : labelFor(o)}</option>)}
+      </select>
+    );
+    const Pagination = ({ page, totalPages, total, setPage, loading, noun = 'results' }) => {
+      if (!total) return null;
+      const btn = (disabled) => ({ ...sharedStyles.buttonOutline, padding: '10px 18px', fontSize: '13px', opacity: disabled ? 0.4 : 1, cursor: disabled ? 'not-allowed' : 'pointer' });
+      return (
+        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '16px', marginTop: '32px', flexWrap: 'wrap' }}>
+          <button disabled={page <= 1 || loading} onClick={() => { setPage(page - 1); window.scrollTo({ top: 0, behavior: 'smooth' }); }} style={btn(page <= 1 || loading)}>← Previous</button>
+          <span style={{ fontSize: '14px', color: '#6b7370' }}>Page {page} of {totalPages} · {total.toLocaleString()} {noun}</span>
+          <button disabled={page >= totalPages || loading} onClick={() => { setPage(page + 1); window.scrollTo({ top: 0, behavior: 'smooth' }); }} style={btn(page >= totalPages || loading)}>Next →</button>
+        </div>
+      );
+    };
+    const ListState = ({ loading, error, empty, icon = '🔍', title = 'No results', text = 'Try adjusting your search or filters' }) => {
+      if (loading) return <div style={{ textAlign: 'center', padding: '60px', color: '#6b7370', fontSize: '15px' }}>Loading…</div>;
+      if (error) return (
+        <div style={{ textAlign: 'center', padding: '60px 40px' }}>
+          <div style={{ fontSize: '48px', marginBottom: '16px' }}>⚠️</div>
+          <h3 style={{ fontSize: '20px', fontWeight: 600, color: '#fff', marginBottom: '8px' }}>Couldn't load data</h3>
+          <p style={{ fontSize: '15px', color: '#6b7370' }}>{error}</p>
+        </div>
+      );
+      if (empty) return (
+        <div style={{ textAlign: 'center', padding: '60px 40px' }}>
+          <div style={{ fontSize: '48px', marginBottom: '16px' }}>{icon}</div>
+          <h3 style={{ fontSize: '20px', fontWeight: 600, color: '#fff', marginBottom: '8px' }}>{title}</h3>
+          <p style={{ fontSize: '15px', color: '#6b7370' }}>{text}</p>
+        </div>
+      );
+      return null;
+    };
+    const ExternalLink = ({ href, children, style }) => href
+      ? <a href={href} target="_blank" rel="noopener noreferrer" style={{ fontSize: '14px', color: '#7dd3c0', fontWeight: 500, textDecoration: 'none', whiteSpace: 'nowrap', ...style }}>{children} ↗</a>
+      : null;
+    // Expand/collapse long text (abstracts, descriptions)
+    const Expandable = ({ text, limit = 220, style }) => {
+      const [open, setOpen] = useState(false);
+      if (!text) return null;
+      const long = text.length > limit;
+      return (
+        <p style={{ fontSize: '14px', color: '#a0a8a4', lineHeight: 1.6, ...style }}>
+          {open || !long ? text : text.slice(0, limit).trimEnd() + '…'}
+          {long && <span onClick={() => setOpen(!open)} style={{ color: '#7dd3c0', cursor: 'pointer', marginLeft: '6px', fontWeight: 500 }}>{open ? 'Less' : 'More'}</span>}
+        </p>
+      );
+    };
+    // Reset to page 1 whenever a filter changes
+    const useResetPage = (setPage, deps) => { const first = useRef(true); useEffect(() => { if (first.current) { first.current = false; return; } setPage(1); }, deps); };
+    // Loads (up to `limit`) rows once so dropdown options can be derived from
+    // the whole dataset rather than the current page.
+    const useFacetRows = (endpoint, limit = 1000) => {
+      const [rows, setRows] = useState([]);
+      useEffect(() => {
+        let cancelled = false;
+        api.get(`${endpoint}${buildQuery({ limit })}`).then(res => { if (!cancelled && res && Array.isArray(res.data)) setRows(res.data); });
+        return () => { cancelled = true; };
+      }, [endpoint]);
+      return rows;
+    };
+
+    // ============================================================
+    // RESEARCH PAGE — peer-reviewed papers & preprints, server-paginated
+    // ============================================================
+    const fmtAuthors = (authors, max = 3) => {
+      const names = (authors || []).map(a => a && a.name).filter(Boolean);
+      if (names.length === 0) return 'Authors not listed';
+      return names.slice(0, max).join(', ') + (names.length > max ? ` et al. (${names.length})` : '');
+    };
+
+    const ResearchPage = ({ user }) => {
+      const apiData = useApiData();
+      const { setCurrentPage } = useAppUI();
+      const [search, setSearch] = useState('');
+      const [substance, setSubstance] = useState('All');
+      const [year, setYear] = useState('All');
+      const [page, setPage] = useState(1);
+      useResetPage(setPage, [search, substance, year]);
+      const { rows, total, totalPages, loading, error, loaded } = usePagedQuery('/research', { search: search.trim(), substance, year, page, limit: 25 });
+
+      // Facets: substances with trials (dashboard) ∪ substances seen in
+      // results; years accumulate from every page fetched this session.
+      const substanceStats = apiData?.stats?.substanceStats || {};
+      const [seen, setSeen] = useState({ years: [], substances: [] });
+      useEffect(() => {
+        if (!rows.length) return;
+        setSeen(prev => ({
+          years: uniqueSorted([...prev.years, ...rows.map(p => p.year).filter(Boolean)]).reverse(),
+          substances: uniqueSorted([...prev.substances, ...rows.flatMap(p => p.substances || [])])
+        }));
+      }, [rows]);
+      const substanceOptions = ['All', ...uniqueSorted([...Object.entries(substanceStats).filter(([n, c]) => c > 0 && n !== 'Other').map(([n]) => n), ...seen.substances])];
+      const yearOptions = ['All', ...uniqueSorted([...seen.years, ...(year !== 'All' ? [Number(year)] : [])]).reverse()];
+      const paperCount = apiData?.stats?.counts?.researchPapers;
+      const preprints = rows.filter(isPreprint).length;
+
+      return (
+        <div style={{ position: 'relative', zIndex: 1, paddingTop: '100px', minHeight: '100vh' }}>
+          <div style={{ padding: '40px', maxWidth: '1280px', margin: '0 auto' }}>
+            <PageHeader suffix="research" title="Research Papers" subtitle="Peer-reviewed studies and preprints on natural medicine, crawled from PubMed, bioRxiv and medRxiv — searchable across titles, abstracts and authors.">
+              <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', marginTop: '24px', flexWrap: 'wrap' }}>
+                <button onClick={() => setCurrentPage('agent')} style={{ ...sharedStyles.button, padding: '12px 24px', fontSize: '14px' }}>🧠 Ask the Research Agent</button>
+                <AlertButton entityType="research_papers" keyword={search} style={{ padding: '12px 24px', fontSize: '14px' }} />
+              </div>
+            </PageHeader>
+
+            <StatTiles stats={[
+              { value: paperCount != null ? paperCount.toLocaleString() : '—', label: 'Papers Indexed', color: '#7dd3c0' },
+              { value: loaded ? total.toLocaleString() : '—', label: 'Matching Your Filters', color: '#a8c5e2' },
+              { value: String(Math.max(substanceOptions.length - 1, 0)), label: 'Substances Covered', color: '#f0b775' },
+              { value: loaded ? `${preprints} / ${rows.length}` : '—', label: 'Preprints on This Page', color: '#d4a5c9' }
+            ]} />
+
+            <div style={{ display: 'flex', gap: '16px', marginBottom: '32px', flexWrap: 'wrap' }}>
+              <input type="text" placeholder="Search titles, abstracts, authors..." value={search} onChange={(e) => setSearch(e.target.value)} style={filterInputStyle} />
+              <FilterSelect value={substance} onChange={setSubstance} options={substanceOptions} allLabel="All Substances" />
+              <FilterSelect value={year} onChange={(v) => setYear(v)} options={yearOptions.map(String)} allLabel="All Years" />
+            </div>
+
+            <ListState loading={loading && !loaded} error={error} empty={loaded && rows.length === 0} icon="📄" title="No papers found" text={search.trim().split(/\s+/).length > 1 ? 'Search matches an exact phrase in titles, abstracts and author names — try a single keyword, or ask the Research Agent, which searches term by term.' : 'Try different keywords, another substance, or clear the year filter.'} />
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', opacity: loading && loaded ? 0.6 : 1, transition: 'opacity 0.2s' }}>
+              {rows.map(p => {
+                const url = paperUrl(p);
+                const preprint = isPreprint(p);
+                return (
+                  <div key={p.id} style={{ ...sharedStyles.card, display: 'flex', gap: '20px', alignItems: 'flex-start' }}>
+                    <div style={{ width: '48px', height: '48px', borderRadius: '12px', background: `${subColor((p.substances || [])[0] || 'Multiple')}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '22px', flexShrink: 0 }}>📄</div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '8px', alignItems: 'center' }}>
+                        {preprint && <span style={{ padding: '3px 8px', fontSize: '11px', fontWeight: 600, background: 'rgba(240,183,117,0.15)', color: '#f0b775', borderRadius: '4px' }}>Preprint</span>}
+                        {p.isOpenAccess && <span style={{ padding: '3px 8px', fontSize: '11px', fontWeight: 600, background: 'rgba(152,212,160,0.15)', color: '#98d4a0', borderRadius: '4px' }}>Open access</span>}
+                        {(p.substances || []).map(s => <SubstanceChip key={s} name={s} />)}
+                      </div>
+                      {url
+                        ? <a href={url} target="_blank" rel="noopener noreferrer" style={{ display: 'block', fontSize: '17px', fontWeight: 600, color: '#fff', marginBottom: '6px', lineHeight: 1.4, textDecoration: 'none' }}>{p.title}</a>
+                        : <h3 style={{ fontSize: '17px', fontWeight: 600, color: '#fff', marginBottom: '6px', lineHeight: 1.4 }}>{p.title}</h3>}
+                      <p style={{ fontSize: '13px', color: '#a0a8a4', marginBottom: '4px' }}>{fmtAuthors(p.authors)}</p>
+                      <p style={{ fontSize: '13px', color: '#6b7370', marginBottom: p.abstract ? '10px' : 0 }}>
+                        <span style={{ color: '#7dd3c0' }}>{p.journal || (preprint ? 'Preprint server' : 'Journal not listed')}</span>
+                        {p.year ? ` · ${p.year}` : ''}
+                        {p.publicationDate ? ` · ${fmtDate(p.publicationDate)}` : ''}
+                        {p.citationCount != null && p.citationCount > 0 ? ` · ${p.citationCount.toLocaleString()} citation${p.citationCount === 1 ? '' : 's'}` : ''}
+                      </p>
+                      <Expandable text={p.abstract} limit={260} />
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '8px', flexShrink: 0 }}>
+                      {url && <button onClick={() => window.open(url, '_blank')} style={{ ...sharedStyles.button, padding: '10px 20px', fontSize: '13px' }}>Read ↗</button>}
+                      {p.pmid && <span style={{ fontSize: '11px', color: '#4a524e' }}>PMID {p.pmid}</span>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <Pagination page={page} totalPages={totalPages} total={total} setPage={setPage} loading={loading} noun="papers" />
+          </div>
+        </div>
+      );
+    };
+
+    // ============================================================
+    // POLICY PAGE — Federal Register documents + state bills (LegiScan)
+    // ============================================================
+    const POLICY_STATUS_COLORS = { 'Rule': '#7dd3c0', 'Proposed Rule': '#f0b775', 'Notice': '#a8c5e2', 'Presidential Document': '#d4a5c9' };
+    const isFederal = (b) => b.jurisdiction === 'US-Federal';
+
+    const PolicyPage = ({ user }) => {
+      const [search, setSearch] = useState('');
+      const [jurisdiction, setJurisdiction] = useState('All');
+      const [substance, setSubstance] = useState('All');
+      const [page, setPage] = useState(1);
+      useResetPage(setPage, [search, jurisdiction, substance]);
+      const { rows, total, totalPages, loading, error, loaded } = usePagedQuery('/legislation', { search: search.trim(), jurisdiction, substance, page, limit: 25 });
+      const facetRows = useFacetRows('/legislation');
+      const jurisdictions = ['All', ...uniqueSorted(facetRows.map(b => b.jurisdiction)).sort((a, b) => (a === 'US-Federal' ? -1 : b === 'US-Federal' ? 1 : jurisdictionLabel(a).localeCompare(jurisdictionLabel(b))))];
+      const substances = optionsFrom(facetRows, b => b.substances || []);
+      const federalTotal = facetRows.filter(isFederal).length;
+      const stateTotal = facetRows.length - federalTotal;
+      const federal = rows.filter(isFederal);
+      const stateBills = rows.filter(b => !isFederal(b));
+
+      const statusStyle = (s) => { const c = POLICY_STATUS_COLORS[s] || '#a0a8a4'; return { padding: '3px 8px', fontSize: '11px', fontWeight: 600, background: `${c}20`, color: c, borderRadius: '4px' }; };
+      const BillCard = ({ b }) => {
+        const fed = isFederal(b);
+        return (
+          <div style={{ ...sharedStyles.card, display: 'flex', gap: '20px', alignItems: 'flex-start', borderLeft: `3px solid ${fed ? '#c084fc' : '#7dd3c0'}` }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '8px', alignItems: 'center' }}>
+                <span style={{ padding: '3px 8px', fontSize: '11px', fontWeight: 600, background: fed ? 'rgba(192,132,252,0.15)' : 'rgba(125,211,192,0.15)', color: fed ? '#c084fc' : '#7dd3c0', borderRadius: '4px' }}>{jurisdictionLabel(b.jurisdiction)}</span>
+                <span style={{ fontSize: '12px', color: '#a0a8a4', fontWeight: 600 }}>{fed ? `FR Doc. ${b.billNumber}` : b.billNumber}</span>
+                {b.status && <span style={statusStyle(b.status)}>{b.status}</span>}
+                {(b.substances || []).map(s => <SubstanceChip key={s} name={s} />)}
+              </div>
+              <a href={b.url} target="_blank" rel="noopener noreferrer" style={{ display: 'block', fontSize: '17px', fontWeight: 600, color: '#fff', marginBottom: '6px', lineHeight: 1.4, textDecoration: 'none' }}>{b.title}</a>
+              <Expandable text={b.description} limit={240} style={{ marginBottom: '8px' }} />
+              <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap', fontSize: '12px', color: '#6b7370' }}>
+                {b.lastActionDate && <span>🗓️ {fmtDate(b.lastActionDate)}{b.lastAction ? ` · ${b.lastAction}` : ''}</span>}
+                {b.agencies && b.agencies.length > 0 && <span>🏛️ {b.agencies.slice(0, 3).join(', ')}{b.agencies.length > 3 ? ` +${b.agencies.length - 3}` : ''}</span>}
+                <span>Source: {b.source}</span>
+              </div>
+            </div>
+            <button onClick={() => window.open(b.url, '_blank')} style={{ ...sharedStyles.buttonOutline, padding: '10px 18px', fontSize: '13px', flexShrink: 0 }}>{fed ? 'Federal Register ↗' : 'View Bill ↗'}</button>
+          </div>
+        );
+      };
+      const Group = ({ title, note, color, items, totalCount }) => items.length === 0 ? null : (
+        <div style={{ marginBottom: '40px' }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: '12px', marginBottom: '16px', flexWrap: 'wrap' }}>
+            <h2 style={{ fontSize: '20px', fontWeight: 600, color: '#fff' }}><span style={{ color }}>●</span> {title}</h2>
+            <span style={{ fontSize: '13px', color: '#6b7370' }}>{note} · {items.length} on this page{totalCount ? ` · ${totalCount} total` : ''}</span>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>{items.map(b => <BillCard key={b.id} b={b} />)}</div>
+        </div>
+      );
+
+      return (
+        <div style={{ position: 'relative', zIndex: 1, paddingTop: '100px', minHeight: '100vh' }}>
+          <div style={{ padding: '40px', maxWidth: '1280px', margin: '0 auto' }}>
+            <PageHeader suffix="policy" title="Policy & Regulation" subtitle="Federal Register rules and notices alongside state legislation on natural medicine — tracked as they move.">
+              <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', marginTop: '24px' }}><AlertButton entityType="legislation" keyword={search} style={{ padding: '12px 24px', fontSize: '14px' }} /></div>
+            </PageHeader>
+            <StatTiles stats={[
+              { value: facetRows.length ? facetRows.length.toLocaleString() : (loaded ? total.toLocaleString() : '—'), label: 'Items Tracked', color: '#7dd3c0' },
+              { value: facetRows.length ? String(federalTotal) : '—', label: 'Federal Documents', color: '#c084fc' },
+              { value: facetRows.length ? String(stateTotal) : '—', label: 'State Bills', color: '#a8c5e2' },
+              { value: facetRows.length ? String(jurisdictions.length - 1) : '—', label: 'Jurisdictions', color: '#f0b775' }
+            ]} />
+            <div style={{ display: 'flex', gap: '16px', marginBottom: '32px', flexWrap: 'wrap' }}>
+              <input type="text" placeholder="Search titles, descriptions, bill numbers..." value={search} onChange={(e) => setSearch(e.target.value)} style={filterInputStyle} />
+              <FilterSelect value={jurisdiction} onChange={setJurisdiction} options={jurisdictions} allLabel="All Jurisdictions" labelFor={jurisdictionLabel} />
+              <FilterSelect value={substance} onChange={setSubstance} options={substances} allLabel="All Substances" />
+            </div>
+            <ListState loading={loading && !loaded} error={error} empty={loaded && rows.length === 0} icon="🏛️" title="No policy items found" text="Try a different jurisdiction or search term." />
+            <div style={{ opacity: loading && loaded ? 0.6 : 1, transition: 'opacity 0.2s' }}>
+              <Group title="Federal" note="Federal Register rules & notices" color="#c084fc" items={federal} totalCount={jurisdiction === 'All' ? federalTotal : null} />
+              <Group title="State Bills" note="State legislation via LegiScan" color="#7dd3c0" items={stateBills} totalCount={jurisdiction === 'All' ? stateTotal : null} />
+            </div>
+            <Pagination page={page} totalPages={totalPages} total={total} setPage={setPage} loading={loading} noun="items" />
+          </div>
+        </div>
+      );
+    };
+
+    // ============================================================
+    // FUNDING PAGE — SEC Form D filings feed
+    // ============================================================
+    const SINCE_OPTIONS = [['All', 'All time'], ['30', 'Last 30 days'], ['90', 'Last 90 days'], ['365', 'Last 12 months'], ['730', 'Last 2 years']];
+    const sinceDate = (days) => days === 'All' ? '' : new Date(Date.now() - Number(days) * 86400000).toISOString().slice(0, 10);
+
+    const FundingPage = ({ user }) => {
+      const [search, setSearch] = useState('');
+      const [since, setSince] = useState('All');
+      const [page, setPage] = useState(1);
+      useResetPage(setPage, [search, since]);
+      const { rows, total, totalPages, loading, error, loaded } = usePagedQuery('/funding', { search: search.trim(), since: sinceDate(since), page, limit: 25 });
+      const facetRows = useFacetRows('/funding');
+      const companies = new Set(facetRows.map(f => f.companyName)).size;
+      const soldTotal = facetRows.reduce((s, f) => s + (Number(f.totalAmountSold) || 0), 0);
+      const latest = facetRows.map(f => f.filedAt).filter(Boolean).sort().pop();
+
+      return (
+        <div style={{ position: 'relative', zIndex: 1, paddingTop: '100px', minHeight: '100vh' }}>
+          <div style={{ padding: '40px', maxWidth: '1280px', margin: '0 auto' }}>
+            <PageHeader suffix="funding" title="Funding Filings" subtitle="Private capital raises disclosed to the SEC — Form D and Form D/A filings by companies in the natural medicine sector, newest first.">
+              <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', marginTop: '24px' }}><AlertButton entityType="funding_events" keyword={search} style={{ padding: '12px 24px', fontSize: '14px' }} /></div>
+            </PageHeader>
+            <StatTiles stats={[
+              { value: facetRows.length ? facetRows.length.toLocaleString() : (loaded ? total.toLocaleString() : '—'), label: 'Filings Tracked', color: '#f0b775' },
+              { value: facetRows.length ? String(companies) : '—', label: 'Issuers', color: '#7dd3c0' },
+              { value: soldTotal > 0 ? fmtMoney(soldTotal) : (facetRows.length ? 'n/a' : '—'), label: 'Disclosed Amount Sold', color: '#98d4a0' },
+              { value: latest ? fmtDate(latest) : '—', label: 'Latest Filing', color: '#a8c5e2' }
+            ]} />
+            <div style={{ display: 'flex', gap: '16px', marginBottom: '32px', flexWrap: 'wrap' }}>
+              <input type="text" placeholder="Search issuer names..." value={search} onChange={(e) => setSearch(e.target.value)} style={filterInputStyle} />
+              <select value={since} onChange={(e) => setSince(e.target.value)} style={filterSelectStyle}>{SINCE_OPTIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
+            </div>
+            <ListState loading={loading && !loaded} error={error} empty={loaded && rows.length === 0} icon="💰" title="No filings found" text="Try a broader date range or a different issuer name." />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', opacity: loading && loaded ? 0.6 : 1, transition: 'opacity 0.2s' }}>
+              {rows.map(f => {
+                const amendment = f.formType === 'D/A';
+                const sold = fmtMoney(f.totalAmountSold);
+                const offering = fmtMoney(f.totalOfferingAmount);
+                const remaining = fmtMoney(f.totalRemaining);
+                const persons = f.relatedPersons || [];
+                return (
+                  <div key={f.id} style={{ ...sharedStyles.card, display: 'flex', gap: '20px', alignItems: 'flex-start' }}>
+                    <div style={{ width: '56px', height: '56px', borderRadius: '16px', background: 'rgba(240,183,117,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '26px', flexShrink: 0 }}>{pickEmoji(f.companyName, COMPANY_EMOJIS)}</div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '8px', alignItems: 'center' }}>
+                        <span title={amendment ? 'Amendment to a prior Form D' : 'Notice of exempt offering of securities'} style={{ padding: '3px 8px', fontSize: '11px', fontWeight: 600, background: amendment ? 'rgba(168,197,226,0.15)' : 'rgba(240,183,117,0.15)', color: amendment ? '#a8c5e2' : '#f0b775', borderRadius: '4px' }}>Form {f.formType}{amendment ? ' · amendment' : ''}</span>
+                        <span style={{ fontSize: '12px', color: '#6b7370' }}>Filed {fmtDate(f.filedAt)}</span>
+                        {f.industryGroup && <span style={{ padding: '3px 8px', fontSize: '11px', background: 'rgba(255,255,255,0.05)', color: '#a0a8a4', borderRadius: '4px' }}>{f.industryGroup}</span>}
+                        {(f.substances || []).map(s => <SubstanceChip key={s} name={s} />)}
+                      </div>
+                      <a href={f.url} target="_blank" rel="noopener noreferrer" style={{ display: 'block', fontSize: '18px', fontWeight: 600, color: '#fff', marginBottom: '10px', lineHeight: 1.35, textDecoration: 'none' }}>{f.companyName}</a>
+                      {(sold || offering || remaining || f.investorCount != null) && (
+                        <div style={{ display: 'flex', gap: '24px', flexWrap: 'wrap', marginBottom: '10px' }}>
+                          {sold && <div><div style={{ fontFamily: '"Fraunces", serif', fontSize: '22px', fontWeight: 600, color: '#98d4a0' }}>{sold}</div><div style={{ fontSize: '11px', color: '#6b7370', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Amount sold</div></div>}
+                          {offering && <div><div style={{ fontFamily: '"Fraunces", serif', fontSize: '22px', fontWeight: 600, color: '#f0b775' }}>{offering}</div><div style={{ fontSize: '11px', color: '#6b7370', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Total offering</div></div>}
+                          {remaining && <div><div style={{ fontFamily: '"Fraunces", serif', fontSize: '22px', fontWeight: 600, color: '#a8c5e2' }}>{remaining}</div><div style={{ fontSize: '11px', color: '#6b7370', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Remaining</div></div>}
+                          {f.investorCount != null && <div><div style={{ fontFamily: '"Fraunces", serif', fontSize: '22px', fontWeight: 600, color: '#fff' }}>{f.investorCount.toLocaleString()}</div><div style={{ fontSize: '11px', color: '#6b7370', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Investors</div></div>}
+                        </div>
+                      )}
+                      <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap', fontSize: '12px', color: '#6b7370' }}>
+                        {(f.issuerCity || f.issuerState) && <span>📍 {[f.issuerCity, f.issuerState].filter(Boolean).join(', ')}</span>}
+                        {f.securityTypes && f.securityTypes.length > 0 && <span>🧾 {f.securityTypes.join(', ')}</span>}
+                        {persons.length > 0 && <span>👤 {persons.slice(0, 3).map(p => `${p.name}${p.roles && p.roles.length ? ` (${p.roles.join('/')})` : ''}`).join(', ')}{persons.length > 3 ? ` +${persons.length - 3}` : ''}</span>}
+                        {f.matchedTerms && f.matchedTerms.length > 0 && <span>🔎 matched: {f.matchedTerms.join(', ')}</span>}
+                        {f.cik && <span>CIK {f.cik}</span>}
+                        <span>Source: {f.source}</span>
+                      </div>
+                    </div>
+                    <button onClick={() => window.open(f.url, '_blank')} style={{ ...sharedStyles.buttonOutline, padding: '10px 18px', fontSize: '13px', flexShrink: 0 }}>SEC Filing ↗</button>
+                  </div>
+                );
+              })}
+            </div>
+            <Pagination page={page} totalPages={totalPages} total={total} setPage={setPage} loading={loading} noun="filings" />
+          </div>
+        </div>
+      );
+    };
+
+    // ============================================================
+    // GRANTS PAGE — NIH RePORTER awards
+    // ============================================================
+    const grantUrl = (g) => g.url || (g.projectNumber ? `https://reporter.nih.gov/quickSearch/${encodeURIComponent(g.projectNumber)}` : null);
+
+    const GrantsPage = ({ user }) => {
+      const [search, setSearch] = useState('');
+      const [substance, setSubstance] = useState('All');
+      const [fiscalYear, setFiscalYear] = useState('All');
+      const [page, setPage] = useState(1);
+      useResetPage(setPage, [search, substance, fiscalYear]);
+      const { rows, total, totalPages, loading, error, loaded } = usePagedQuery('/grants', { search: search.trim(), substance, fiscalYear, page, limit: 25 });
+      const facetRows = useFacetRows('/grants');
+      const substances = optionsFrom(facetRows, g => g.substances || []);
+      const fiscalYears = ['All', ...uniqueSorted(facetRows.map(g => g.fiscalYear)).reverse().map(String)];
+      const awarded = facetRows.reduce((s, g) => s + (Number(g.awardAmount) || 0), 0);
+      const orgs = new Set(facetRows.map(g => g.organization).filter(Boolean)).size;
+      const agencies = new Set(facetRows.map(g => g.agency).filter(Boolean)).size;
+
+      return (
+        <div style={{ position: 'relative', zIndex: 1, paddingTop: '100px', minHeight: '100vh' }}>
+          <div style={{ padding: '40px', maxWidth: '1280px', margin: '0 auto' }}>
+            <PageHeader suffix="grants" title="Research Grants" subtitle="Federally funded natural medicine research from NIH RePORTER — who is funding what, where, and for how much.">
+              <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', marginTop: '24px' }}><AlertButton entityType="grants" keyword={search} style={{ padding: '12px 24px', fontSize: '14px' }} /></div>
+            </PageHeader>
+            <StatTiles stats={[
+              { value: facetRows.length ? facetRows.length.toLocaleString() : (loaded ? total.toLocaleString() : '—'), label: 'Grants Tracked', color: '#7dd3c0' },
+              { value: awarded > 0 ? fmtMoney(awarded) : '—', label: 'Total Awarded', color: '#98d4a0' },
+              { value: facetRows.length ? String(orgs) : '—', label: 'Organizations', color: '#a8c5e2' },
+              { value: fiscalYears.length > 2 ? `FY ${fiscalYears[fiscalYears.length - 1]}–${fiscalYears[1]}` : fiscalYears.length === 2 ? `FY ${fiscalYears[1]}` : '—', label: `Fiscal Years · ${agencies} agenc${agencies === 1 ? 'y' : 'ies'}`, color: '#f0b775' }
+            ]} />
+            <div style={{ display: 'flex', gap: '16px', marginBottom: '32px', flexWrap: 'wrap' }}>
+              <input type="text" placeholder="Search titles, organizations, investigators..." value={search} onChange={(e) => setSearch(e.target.value)} style={filterInputStyle} />
+              <FilterSelect value={substance} onChange={setSubstance} options={substances} allLabel="All Substances" />
+              <FilterSelect value={fiscalYear} onChange={setFiscalYear} options={fiscalYears} allLabel="All Fiscal Years" labelFor={(y) => `FY ${y}`} />
+            </div>
+            <ListState loading={loading && !loaded} error={error} empty={loaded && rows.length === 0} icon="🎯" title="No grants found" text="Try another fiscal year, substance, or search term." />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', opacity: loading && loaded ? 0.6 : 1, transition: 'opacity 0.2s' }}>
+              {rows.map(g => {
+                const url = grantUrl(g);
+                const amount = fmtMoney(g.awardAmount);
+                return (
+                  <div key={g.id} style={{ ...sharedStyles.card, display: 'flex', gap: '20px', alignItems: 'flex-start' }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '8px', alignItems: 'center' }}>
+                        {g.fiscalYear && <span style={{ padding: '3px 8px', fontSize: '11px', fontWeight: 600, background: 'rgba(168,197,226,0.15)', color: '#a8c5e2', borderRadius: '4px' }}>FY {g.fiscalYear}</span>}
+                        {g.agency && <span style={{ padding: '3px 8px', fontSize: '11px', fontWeight: 600, background: 'rgba(255,255,255,0.05)', color: '#a0a8a4', borderRadius: '4px' }}>{g.agency}</span>}
+                        <span style={{ fontSize: '12px', color: '#6b7370' }}>{g.projectNumber}</span>
+                        {(g.substances || []).map(s => <SubstanceChip key={s} name={s} />)}
+                      </div>
+                      {url
+                        ? <a href={url} target="_blank" rel="noopener noreferrer" style={{ display: 'block', fontSize: '17px', fontWeight: 600, color: '#fff', marginBottom: '8px', lineHeight: 1.4, textDecoration: 'none' }}>{g.title}</a>
+                        : <h3 style={{ fontSize: '17px', fontWeight: 600, color: '#fff', marginBottom: '8px', lineHeight: 1.4 }}>{g.title}</h3>}
+                      <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap', fontSize: '13px', color: '#a0a8a4', marginBottom: '8px' }}>
+                        {g.piNames && g.piNames.length > 0 && <span>👤 {g.piNames.slice(0, 3).join(', ')}{g.piNames.length > 3 ? ` +${g.piNames.length - 3}` : ''}</span>}
+                        {g.organization && <span>🏛️ {g.organization}</span>}
+                        {(g.startDate || g.endDate) && <span style={{ color: '#6b7370' }}>🗓️ {fmtDate(g.startDate) || '?'} – {fmtDate(g.endDate) || '?'}</span>}
+                      </div>
+                      <Expandable text={g.abstract} limit={240} />
+                      <div style={{ fontSize: '12px', color: '#4a524e', marginTop: '8px' }}>Source: {g.source}</div>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '10px', flexShrink: 0 }}>
+                      {amount && <div style={{ textAlign: 'right' }}><div style={{ fontFamily: '"Fraunces", serif', fontSize: '24px', fontWeight: 600, color: '#98d4a0' }}>{amount}</div><div style={{ fontSize: '11px', color: '#6b7370', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Award</div></div>}
+                      {url && <button onClick={() => window.open(url, '_blank')} style={{ ...sharedStyles.buttonOutline, padding: '10px 18px', fontSize: '13px' }}>NIH RePORTER ↗</button>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <Pagination page={page} totalPages={totalPages} total={total} setPage={setPage} loading={loading} noun="grants" />
+          </div>
+        </div>
+      );
+    };
+
+    // ============================================================
+    // READOUTS PAGE — expected trial results windows, soonest first
+    // ============================================================
+    const READOUT_PHASE_COLORS = { 'Phase 1': '#a8c5e2', 'Phase 1/Phase 2': '#a8c5e2', 'Phase 2': '#f0b775', 'Phase 2/Phase 3': '#f0b775', 'Phase 3': '#7dd3c0', 'Phase 4': '#98d4a0', 'Early Phase 1': '#a8c5e2', 'N/A': '#6b7370' };
+    const monthKey = (d) => { const dt = new Date(d + 'T12:00:00'); return Number.isNaN(dt.getTime()) ? 'Unscheduled' : dt.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }); };
+    const fmtWindow = (a, b) => {
+      const s = new Date(a + 'T12:00:00'), e = new Date(b + 'T12:00:00');
+      if (Number.isNaN(s.getTime()) || Number.isNaN(e.getTime())) return `${a} – ${b}`;
+      const sameYear = s.getFullYear() === e.getFullYear();
+      return `${s.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: sameYear ? undefined : 'numeric' })} – ${e.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
+    };
+
+    const ReadoutsPage = ({ user }) => {
+      const { setCurrentPage } = useAppUI();
+      const [phase, setPhase] = useState('All');
+      const [substance, setSubstance] = useState('All');
+      // One unfiltered fetch (the server already caps the horizon by plan);
+      // phase/substance filter locally so the options never collapse.
+      const [state, setState] = useState({ loading: true, rows: null, total: 0 });
+      useEffect(() => {
+        let cancelled = false;
+        api.get(`/readouts${buildQuery({ limit: 500 })}`).then(res => { if (!cancelled) setState({ loading: false, rows: res && Array.isArray(res.data) ? res.data : null, total: res?.total || 0 }); });
+        return () => { cancelled = true; };
+      }, [user && user.id]);
+      const all = state.rows || [];
+      const phases = optionsFrom(all, r => r.phase || 'N/A');
+      const substances = optionsFrom(all, r => r.substances || []);
+      const filtered = all
+        .filter(r => (phase === 'All' || (r.phase || 'N/A') === phase) && (substance === 'All' || (r.substances || []).includes(substance)))
+        .sort((a, b) => (a.expectedReadoutStart || '').localeCompare(b.expectedReadoutStart || ''));
+      const groups = [];
+      filtered.forEach(r => { const k = monthKey(r.expectedReadoutStart); const g = groups[groups.length - 1]; if (g && g.key === k) g.items.push(r); else groups.push({ key: k, items: [r] }); });
+      const paid = isPaidPlan(user);
+      const horizonEnd = all.map(r => r.expectedReadoutStart).sort().pop();
+      const phaseColor = (p) => READOUT_PHASE_COLORS[p] || '#a0a8a4';
+
+      return (
+        <div style={{ position: 'relative', zIndex: 1, paddingTop: '100px', minHeight: '100vh' }}>
+          <div style={{ padding: '40px', maxWidth: '1280px', margin: '0 auto' }}>
+            <PageHeader suffix="readouts" title="Readout Calendar" subtitle="When to expect results: each window is a trial's registered completion date plus the typical 3–9 month publication lag. Soonest first." />
+            {!paid && (
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px', flexWrap: 'wrap', padding: '16px 20px', marginBottom: '32px', background: 'linear-gradient(135deg, rgba(125,211,192,0.10) 0%, rgba(168,197,226,0.06) 100%)', border: '1px solid rgba(125,211,192,0.25)', borderRadius: '16px' }}>
+                <div style={{ fontSize: '14px', color: '#e8ebe9' }}><strong style={{ color: '#7dd3c0' }}>Showing the next 90 days.</strong> Pro unlocks the full 18-month readout calendar.</div>
+                <button onClick={() => setCurrentPage(user ? 'account' : 'home')} style={{ ...sharedStyles.button, padding: '10px 20px', fontSize: '13px' }}>{user ? 'Upgrade to Pro' : 'See plans'}</button>
+              </div>
+            )}
+            <StatTiles stats={[
+              { value: state.rows ? String(filtered.length) : '—', label: 'Expected Readouts', color: '#7dd3c0' },
+              { value: state.rows ? String(filtered.filter(r => /3/.test(r.phase || '')).length) : '—', label: 'Phase 3 Readouts', color: '#f0b775' },
+              { value: state.rows ? String(new Set(filtered.map(r => r.sponsor).filter(Boolean)).size) : '—', label: 'Sponsors', color: '#a8c5e2' },
+              { value: state.rows ? (paid ? '18 months' : '90 days') : '—', label: 'Calendar Horizon', color: '#d4a5c9' }
+            ]} />
+            <div style={{ display: 'flex', gap: '16px', marginBottom: '32px', flexWrap: 'wrap' }}>
+              <FilterSelect value={phase} onChange={setPhase} options={phases} allLabel="All Phases" />
+              <FilterSelect value={substance} onChange={setSubstance} options={substances} allLabel="All Substances" />
+              {horizonEnd && <span style={{ fontSize: '13px', color: '#6b7370', alignSelf: 'center' }}>Windows opening through {fmtDate(horizonEnd)}</span>}
+            </div>
+            <ListState loading={state.loading} error={!state.loading && state.rows === null ? 'Could not load the readout calendar from the Neuly API.' : null} empty={!state.loading && state.rows !== null && filtered.length === 0} icon="🗓️" title="No readouts in this window" text={paid ? 'No trials match these filters in the next 18 months.' : 'No trials match these filters in the next 90 days — Pro extends the calendar to 18 months.'} />
+            <div style={{ position: 'relative', paddingLeft: '28px' }}>
+              {groups.length > 0 && <div style={{ position: 'absolute', left: '7px', top: '8px', bottom: '8px', width: '2px', background: 'rgba(255,255,255,0.08)' }} />}
+              {groups.map(g => (
+                <div key={g.key} style={{ marginBottom: '36px', position: 'relative' }}>
+                  <div style={{ position: 'absolute', left: '-28px', top: '4px', width: '16px', height: '16px', borderRadius: '50%', background: '#0a0f0d', border: '3px solid #7dd3c0' }} />
+                  <h2 style={{ fontFamily: '"Fraunces", serif', fontSize: '24px', fontWeight: 600, color: '#fff', marginBottom: '16px' }}>{g.key} <span style={{ fontSize: '14px', color: '#6b7370', fontFamily: '"DM Sans", sans-serif', fontWeight: 500 }}>· {g.items.length} expected</span></h2>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                    {g.items.map(r => (
+                      <div key={r.trialId} style={{ ...sharedStyles.card, display: 'flex', gap: '20px', alignItems: 'flex-start', padding: '22px 24px' }}>
+                        <div style={{ minWidth: '150px', flexShrink: 0 }}>
+                          <div style={{ fontSize: '13px', fontWeight: 600, color: '#7dd3c0', marginBottom: '4px' }}>{fmtWindow(r.expectedReadoutStart, r.expectedReadoutEnd)}</div>
+                          <div style={{ fontSize: '11px', color: '#6b7370', lineHeight: 1.5 }}>{r.anchorField === 'primaryCompletionDate' ? 'Primary completion' : 'Study completion'}: {fmtDate(r.anchorDate)}</div>
+                        </div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '8px', alignItems: 'center' }}>
+                            <span style={{ padding: '3px 8px', fontSize: '11px', fontWeight: 600, background: `${phaseColor(r.phase || 'N/A')}20`, color: phaseColor(r.phase || 'N/A'), borderRadius: '4px' }}>{r.phase || 'Phase N/A'}</span>
+                            <span style={{ padding: '3px 8px', fontSize: '11px', background: 'rgba(255,255,255,0.05)', color: '#a0a8a4', borderRadius: '4px' }}>{r.status}</span>
+                            {r.enrollment != null && <span style={{ padding: '3px 8px', fontSize: '11px', background: 'rgba(255,255,255,0.03)', color: '#6b7370', borderRadius: '4px' }}>n={r.enrollment}</span>}
+                            {(r.substances || []).map(s => <SubstanceChip key={s} name={s} />)}
+                          </div>
+                          <a href={r.url} target="_blank" rel="noopener noreferrer" style={{ display: 'block', fontSize: '16px', fontWeight: 600, color: '#fff', marginBottom: '6px', lineHeight: 1.4, textDecoration: 'none' }}>{r.title}</a>
+                          <p style={{ fontSize: '13px', color: '#6b7370' }}>{r.sponsor || 'Sponsor not listed'}{r.conditions && r.conditions.length ? ` · ${r.conditions.slice(0, 3).join(', ')}` : ''} · {r.nctId}</p>
+                        </div>
+                        <button onClick={() => window.open(r.url, '_blank')} style={{ ...sharedStyles.buttonOutline, padding: '10px 18px', fontSize: '13px', flexShrink: 0 }}>View Trial ↗</button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    // ============================================================
+    // ACCOUNT PAGE — plan & billing, alerts, CSV export, API keys
+    // ============================================================
+    const PLAN_META = {
+      free: { name: 'Free', color: '#a0a8a4', blurb: '1 alert, 7-day change history, 90-day readout calendar.' },
+      pro: { name: 'Pro', color: '#7dd3c0', blurb: 'Unlimited alerts, full change history, 18-month readout calendar, CSV exports.' },
+      enterprise: { name: 'Enterprise', color: '#f0b775', blurb: 'Everything in Pro plus API access with keys for your own integrations.' }
+    };
+    const copyText = async (text) => {
+      try { await navigator.clipboard.writeText(text); return true; } catch (e) {
+        try { const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); return true; } catch (e2) { return false; }
+      }
+    };
+    const ErrorNote = ({ text }) => text ? <div style={{ marginTop: '12px', padding: '12px 16px', fontSize: '13px', color: '#e57373', background: 'rgba(229,115,115,0.1)', border: '1px solid rgba(229,115,115,0.3)', borderRadius: '10px' }}>{text}</div> : null;
+    const SectionCard = ({ title, badge, children }) => (
+      <div style={{ ...sharedStyles.card, marginBottom: '24px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '18px', flexWrap: 'wrap' }}>
+          <h2 style={{ fontSize: '18px', fontWeight: 600, color: '#fff' }}>{title}</h2>
+          {badge}
+        </div>
+        {children}
+      </div>
+    );
+    const PlanBadge = ({ text, color = '#7dd3c0' }) => <span style={{ padding: '3px 10px', fontSize: '11px', fontWeight: 600, background: `${color}20`, color, borderRadius: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{text}</span>;
+
+    const AccountPage = ({ user, prefill, clearPrefill }) => {
+      const { openAuth, setCurrentPage } = useAppUI();
+      const plan = (user && user.plan) || 'free';
+      const meta = PLAN_META[plan] || PLAN_META.free;
+      const paid = isPaidPlan(user);
+
+      // --- billing ---
+      const [billingBusy, setBillingBusy] = useState(null);
+      const [billingError, setBillingError] = useState(null);
+      const billing = async (path, body, key) => {
+        setBillingBusy(key); setBillingError(null);
+        try {
+          const res = await api.post(path, body);
+          if (!res || !res.url) throw new Error('The billing service did not return a redirect URL.');
+          window.location.assign(res.url);
+        } catch (err) {
+          setBillingError(err.message === 'Failed to fetch' ? 'Could not reach the Neuly API.' : err.message);
+          setBillingBusy(null);
+        }
+      };
+
+      // --- alerts ---
+      const [alerts, setAlerts] = useState(null);
+      const [alertType, setAlertType] = useState((prefill && prefill.entityType) || 'All');
+      const [alertKeyword, setAlertKeyword] = useState((prefill && prefill.keyword) || '');
+      const [alertError, setAlertError] = useState(null);
+      const [alertBusy, setAlertBusy] = useState(false);
+      const alertFormRef = useRef(null);
+      const loadAlerts = () => api.get('/alerts').then(res => setAlerts(res && Array.isArray(res.data) ? res.data : (res === null ? null : [])));
+      useEffect(() => { if (user) loadAlerts(); }, [user && user.id]);
+      useEffect(() => {
+        if (prefill) {
+          setAlertType(prefill.entityType || 'All');
+          setAlertKeyword(prefill.keyword || '');
+          setTimeout(() => alertFormRef.current && alertFormRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' }), 50);
+          clearPrefill && clearPrefill();
+        }
+      }, [prefill]);
+      const createAlert = async (e) => {
+        e.preventDefault();
+        if (alertBusy) return;
+        setAlertBusy(true); setAlertError(null);
+        try {
+          await api.post('/alerts', { entityType: alertType === 'All' ? null : alertType, keyword: alertKeyword.trim() || null });
+          setAlertKeyword('');
+          await loadAlerts();
+        } catch (err) { setAlertError(err.message); } finally { setAlertBusy(false); }
+      };
+      const deleteAlert = async (id) => {
+        setAlerts(prev => (prev || []).filter(a => a.id !== id));
+        try { await api.del(`/alerts/${id}`); } catch (err) { setAlertError(err.message); loadAlerts(); }
+      };
+
+      // --- API keys (enterprise) ---
+      const [keys, setKeys] = useState(null);
+      const [keyLabel, setKeyLabel] = useState('');
+      const [newKey, setNewKey] = useState(null);
+      const [keyError, setKeyError] = useState(null);
+      const [copied, setCopied] = useState(false);
+      const loadKeys = () => api.get('/keys').then(res => setKeys(res && Array.isArray(res.data) ? res.data : []));
+      useEffect(() => { if (user && plan === 'enterprise') loadKeys(); }, [user && user.id, plan]);
+      const createKey = async (e) => {
+        e.preventDefault(); setKeyError(null);
+        try {
+          const res = await api.post('/keys', { label: keyLabel.trim() || null });
+          setNewKey(res); setKeyLabel(''); setCopied(false);
+          await loadKeys();
+        } catch (err) { setKeyError(err.message); }
+      };
+      const revokeKey = async (id) => {
+        try { await api.del(`/keys/${id}`); await loadKeys(); } catch (err) { setKeyError(err.message); }
+      };
+
+      if (!user) {
+        return (
+          <div style={{ position: 'relative', zIndex: 1, paddingTop: '100px', minHeight: '100vh' }}>
+            <div style={{ padding: '40px', maxWidth: '640px', margin: '0 auto', textAlign: 'center' }}>
+              <div style={{ fontSize: '48px', marginBottom: '16px' }}>⚙️</div>
+              <h1 style={{ fontFamily: '"Fraunces", serif', fontSize: '36px', fontWeight: 600, color: '#fff', marginBottom: '12px' }}>Your account</h1>
+              <p style={{ fontSize: '16px', color: '#a0a8a4', marginBottom: '28px', lineHeight: 1.6 }}>Log in to manage your plan, research alerts, CSV exports, and API keys.</p>
+              <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
+                <button onClick={() => openAuth('login')} style={sharedStyles.button}>Log In</button>
+                <button onClick={() => openAuth('signup')} style={sharedStyles.buttonOutline}>Create Free Account</button>
+              </div>
+            </div>
+          </div>
+        );
+      }
+
+      const inputStyle = { ...authInputStyle, padding: '12px 16px', fontSize: '14px' };
+      const selectStyle = { ...filterSelectStyle, padding: '12px 16px', color: '#fff' };
+
+      return (
+        <div style={{ position: 'relative', zIndex: 1, paddingTop: '100px', minHeight: '100vh' }}>
+          <div style={{ padding: '40px', maxWidth: '1280px', margin: '0 auto' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '20px', marginBottom: '36px', flexWrap: 'wrap' }}>
+              <div style={{ width: '64px', height: '64px', borderRadius: '50%', background: 'linear-gradient(135deg, #7dd3c0 0%, #a8c5e2 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '26px', fontWeight: 600, color: '#0a0f0d' }}>{initialOf(user)}</div>
+              <div style={{ flex: 1, minWidth: '200px' }}>
+                <h1 style={{ fontFamily: '"Fraunces", serif', fontSize: '32px', fontWeight: 600, color: '#fff', marginBottom: '4px' }}>{displayName(user)}</h1>
+                <p style={{ fontSize: '14px', color: '#6b7370' }}>{user.email}</p>
+              </div>
+              <button onClick={() => setCurrentPage('dashboard')} style={{ ...sharedStyles.buttonOutline, padding: '10px 20px', fontSize: '13px' }}>← Dashboard</button>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px', alignItems: 'start' }}>
+              <div>
+                {/* Plan & billing */}
+                <SectionCard title="Plan" badge={<PlanBadge text={`${meta.name} plan`} color={meta.color} />}>
+                  <p style={{ fontSize: '14px', color: '#a0a8a4', lineHeight: 1.6, marginBottom: '18px' }}>{meta.blurb}</p>
+                  <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                    {plan === 'free' && <button disabled={Boolean(billingBusy)} onClick={() => billing('/billing/checkout', { plan: 'pro' }, 'pro')} style={{ ...sharedStyles.button, padding: '12px 22px', fontSize: '14px', opacity: billingBusy ? 0.6 : 1 }}>{billingBusy === 'pro' ? 'Redirecting…' : 'Upgrade to Pro'}</button>}
+                    {plan !== 'enterprise' && <button disabled={Boolean(billingBusy)} onClick={() => billing('/billing/checkout', { plan: 'enterprise' }, 'enterprise')} style={{ ...(plan === 'pro' ? sharedStyles.button : sharedStyles.buttonOutline), padding: '12px 22px', fontSize: '14px', opacity: billingBusy ? 0.6 : 1 }}>{billingBusy === 'enterprise' ? 'Redirecting…' : 'Upgrade to Enterprise'}</button>}
+                    {paid && <button disabled={Boolean(billingBusy)} onClick={() => billing('/billing/portal', undefined, 'portal')} style={{ ...sharedStyles.buttonOutline, padding: '12px 22px', fontSize: '14px', opacity: billingBusy ? 0.6 : 1 }}>{billingBusy === 'portal' ? 'Redirecting…' : 'Manage billing'}</button>}
+                  </div>
+                  <ErrorNote text={billingError} />
+                </SectionCard>
+
+                {/* CSV export */}
+                <SectionCard title="CSV Export" badge={<PlanBadge text="Pro · Enterprise" color="#f0b775" />}>
+                  <p style={{ fontSize: '14px', color: '#a0a8a4', lineHeight: 1.6, marginBottom: '16px' }}>{paid ? 'Download any dataset as CSV. Each file opens in a new tab.' : 'CSV downloads of every dataset are included with Pro and Enterprise.'}</p>
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                    {EXPORT_TYPES.map(([type, label]) => (
+                      <button key={type} disabled={!paid} title={paid ? `Download ${label} as CSV` : 'Upgrade to Pro to export'} onClick={() => paid && window.open(`${API_BASE_URL}/export/${type}`, '_blank')} style={{ ...sharedStyles.buttonOutline, padding: '8px 14px', fontSize: '12px', opacity: paid ? 1 : 0.45, cursor: paid ? 'pointer' : 'not-allowed' }}>⬇ {label}</button>
+                    ))}
+                  </div>
+                  {!paid && <div style={{ marginTop: '14px', fontSize: '13px', color: '#6b7370' }}>🔒 Exports are locked on the Free plan — <span onClick={() => billing('/billing/checkout', { plan: 'pro' }, 'pro')} style={{ color: '#7dd3c0', cursor: 'pointer', fontWeight: 500 }}>upgrade to Pro</span> to enable them.</div>}
+                </SectionCard>
+              </div>
+
+              <div>
+                {/* Alerts */}
+                <SectionCard title="Research Alerts" badge={<PlanBadge text={plan === 'free' ? '1 alert on Free' : 'Unlimited'} color={plan === 'free' ? '#a0a8a4' : '#7dd3c0'} />}>
+                  <p style={{ fontSize: '14px', color: '#a0a8a4', lineHeight: 1.6, marginBottom: '16px' }}>Get emailed when new records match a dataset and/or keyword after each crawl.</p>
+                  <form ref={alertFormRef} onSubmit={createAlert} style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '16px' }}>
+                    <select value={alertType} onChange={(e) => setAlertType(e.target.value)} style={{ ...selectStyle, minWidth: '170px' }}>
+                      <option value="All">All datasets</option>
+                      {ALERT_ENTITY_TYPES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+                    </select>
+                    <input value={alertKeyword} onChange={(e) => setAlertKeyword(e.target.value)} placeholder="Keyword (optional, e.g. psilocybin)" style={{ ...inputStyle, flex: 1, minWidth: '180px', width: 'auto' }} />
+                    <button type="submit" disabled={alertBusy} style={{ ...sharedStyles.button, padding: '12px 20px', fontSize: '14px', opacity: alertBusy ? 0.6 : 1 }}>{alertBusy ? 'Saving…' : '+ Add alert'}</button>
+                  </form>
+                  <ErrorNote text={alertError} />
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: alertError ? '12px' : 0 }}>
+                    {alerts === null && <p style={{ fontSize: '13px', color: '#6b7370' }}>Loading alerts…</p>}
+                    {alerts && alerts.length === 0 && <p style={{ fontSize: '13px', color: '#6b7370' }}>No alerts yet. Add one above, or use “Create alert” on the Research, Policy, Funding and Grants pages.</p>}
+                    {(alerts || []).map(a => (
+                      <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '12px 16px', background: 'rgba(255,255,255,0.02)', borderRadius: '12px', borderLeft: '3px solid #7dd3c0' }}>
+                        <span style={{ fontSize: '18px' }}>🔔</span>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: '14px', color: '#fff', fontWeight: 500 }}>{entityLabel(a.entity_type)}{a.keyword ? <span style={{ color: '#7dd3c0' }}> · “{a.keyword}”</span> : ''}</div>
+                          <div style={{ fontSize: '12px', color: '#6b7370' }}>Created {timeAgo(a.created_at)}{a.last_notified_at ? ` · last emailed ${timeAgo(a.last_notified_at)}` : ' · not triggered yet'}</div>
+                        </div>
+                        <button onClick={() => deleteAlert(a.id)} style={{ ...sharedStyles.buttonOutline, padding: '6px 12px', fontSize: '12px', color: '#e57373', borderColor: 'rgba(229,115,115,0.3)' }}>Delete</button>
+                      </div>
+                    ))}
+                  </div>
+                </SectionCard>
+
+                {/* API keys */}
+                <SectionCard title="API Keys" badge={<PlanBadge text="Enterprise" color="#f0b775" />}>
+                  {plan !== 'enterprise' ? (
+                    <p style={{ fontSize: '14px', color: '#a0a8a4', lineHeight: 1.6 }}>🔒 Programmatic access to the Neuly API is part of the Enterprise plan. <span onClick={() => billing('/billing/checkout', { plan: 'enterprise' }, 'enterprise')} style={{ color: '#7dd3c0', cursor: 'pointer', fontWeight: 500 }}>Upgrade to Enterprise</span> to create keys.</p>
+                  ) : (
+                    <>
+                      <p style={{ fontSize: '14px', color: '#a0a8a4', lineHeight: 1.6, marginBottom: '16px' }}>Send keys as <code style={{ color: '#7dd3c0' }}>Authorization: Bearer nk_…</code>. A key is shown once at creation.</p>
+                      <form onSubmit={createKey} style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '16px' }}>
+                        <input value={keyLabel} onChange={(e) => setKeyLabel(e.target.value)} placeholder="Label (e.g. data warehouse sync)" style={{ ...inputStyle, flex: 1, minWidth: '180px', width: 'auto' }} />
+                        <button type="submit" style={{ ...sharedStyles.button, padding: '12px 20px', fontSize: '14px' }}>+ Create key</button>
+                      </form>
+                      <ErrorNote text={keyError} />
+                      {newKey && newKey.key && (
+                        <div style={{ margin: '12px 0 16px', padding: '16px', background: 'rgba(125,211,192,0.08)', border: '1px solid rgba(125,211,192,0.3)', borderRadius: '12px' }}>
+                          <div style={{ fontSize: '13px', color: '#7dd3c0', fontWeight: 600, marginBottom: '8px' }}>New key{newKey.label ? ` · ${newKey.label}` : ''} — copy it now, it won't be shown again</div>
+                          <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+                            <code style={{ flex: 1, minWidth: '200px', padding: '10px 12px', background: 'rgba(0,0,0,0.35)', borderRadius: '8px', color: '#fff', fontSize: '13px', wordBreak: 'break-all', userSelect: 'all' }}>{newKey.key}</code>
+                            <button onClick={async () => setCopied(await copyText(newKey.key))} style={{ ...sharedStyles.buttonOutline, padding: '10px 16px', fontSize: '13px' }}>{copied ? 'Copied ✓' : 'Copy'}</button>
+                            <button onClick={() => setNewKey(null)} style={{ background: 'transparent', border: 'none', color: '#6b7370', fontSize: '13px', cursor: 'pointer' }}>Dismiss</button>
+                          </div>
+                        </div>
+                      )}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                        {keys === null && <p style={{ fontSize: '13px', color: '#6b7370' }}>Loading keys…</p>}
+                        {keys && keys.length === 0 && <p style={{ fontSize: '13px', color: '#6b7370' }}>No API keys yet.</p>}
+                        {(keys || []).map(k => (
+                          <div key={k.id} style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '12px 16px', background: 'rgba(255,255,255,0.02)', borderRadius: '12px', opacity: k.revoked_at ? 0.5 : 1 }}>
+                            <span style={{ fontSize: '18px' }}>🔑</span>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontSize: '14px', color: '#fff', fontWeight: 500 }}>{k.label || 'Untitled key'} <span style={{ fontSize: '11px', color: '#4a524e' }}>{k.id}</span></div>
+                              <div style={{ fontSize: '12px', color: '#6b7370' }}>Created {timeAgo(k.created_at)}{k.last_used_at ? ` · last used ${timeAgo(k.last_used_at)}` : ' · never used'}{k.revoked_at ? ' · revoked' : ''}</div>
+                            </div>
+                            {!k.revoked_at && <button onClick={() => revokeKey(k.id)} style={{ ...sharedStyles.buttonOutline, padding: '6px 12px', fontSize: '12px', color: '#e57373', borderColor: 'rgba(229,115,115,0.3)' }}>Revoke</button>}
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </SectionCard>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
     const Footer = () => (
       <footer style={{ borderTop: '1px solid rgba(255,255,255,0.06)', padding: '60px 40px 40px', position: 'relative', zIndex: 1 }}>
         <div style={{ maxWidth: '1280px', margin: '0 auto', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '24px' }}>
@@ -2874,6 +3883,10 @@
       const [authModal, setAuthModal] = useState(null); // null | 'login' | 'signup'
       const [selectedCompany, setSelectedCompany] = useState(null);
       const [selectedPerson, setSelectedPerson] = useState(null);
+      // "Create alert for this" hands { entityType, keyword } to the Account page
+      const [alertPrefill, setAlertPrefill] = useState(null);
+      // Stripe returns to /account?upgraded=1 — open the Account page there
+      const wantsAccount = /^\/account/.test(window.location.pathname);
 
       // Restore an existing session cookie on load. Raw fetch: a 401 here
       // just means "not signed in", which isn't an error worth logging.
@@ -2881,12 +3894,18 @@
         let cancelled = false;
         fetch(`${API_BASE_URL}/auth/me`, { credentials: 'include' })
           .then(r => (r.ok ? r.json() : null))
-          .then(res => { if (!cancelled && res && res.user) setUser(res.user); })
+          .then(res => { if (!cancelled && res && res.user) { setUser(res.user); if (wantsAccount) setCurrentPage('account'); } })
           .catch(() => undefined);
         return () => { cancelled = true; };
       }, []);
 
       const openAuth = (mode) => setAuthModal(mode || 'signup');
+      const requestAlert = (entityType, keyword) => {
+        if (!user) { openAuth('login'); return; }
+        setAlertPrefill({ entityType: entityType || null, keyword: keyword || '' });
+        setCurrentPage('account');
+        window.scrollTo(0, 0);
+      };
       const onAuthed = (authedUser) => {
         setUser(authedUser);
         setAuthModal(null);
@@ -2919,7 +3938,19 @@
           case 'dashboard':
             return user ? <DashboardPage user={user} setCurrentPage={setCurrentPage} /> : homePage;
           case 'research':
+            return <ResearchPage user={user} />;
+          case 'agent':
             return <ResearchAgentPage user={user} />;
+          case 'policy':
+            return <PolicyPage user={user} />;
+          case 'funding':
+            return <FundingPage user={user} />;
+          case 'grants':
+            return <GrantsPage user={user} />;
+          case 'readouts':
+            return <ReadoutsPage user={user} />;
+          case 'account':
+            return <AccountPage user={user} prefill={alertPrefill} clearPrefill={() => setAlertPrefill(null)} />;
           case 'companies':
             return <CompaniesPage user={user} setSelectedCompany={setSelectedCompany} setCurrentPage={setCurrentPage} />;
           case 'company-profile':
@@ -2947,6 +3978,7 @@
       const appMode = Boolean(user) && isMobile;
 
       return (
+        <AppUIContext.Provider value={{ user, openAuth, setCurrentPage, requestAlert }}>
         <SavesProvider user={user} requireAuth={openAuth}>
           <div style={{ ...sharedStyles.container, ...(appMode ? { paddingBottom: 'calc(84px + env(safe-area-inset-bottom))' } : {}) }}>
             <AmbientBackground />
@@ -2956,6 +3988,7 @@
             {authModal && <AuthModal mode={authModal} setMode={setAuthModal} onClose={() => setAuthModal(null)} onAuthed={onAuthed} />}
           </div>
         </SavesProvider>
+        </AppUIContext.Provider>
       );
     };
 
