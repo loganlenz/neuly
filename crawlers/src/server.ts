@@ -25,6 +25,8 @@ import {
   LegislationBill,
   FundingEvent,
   Grant,
+  CareProvider,
+  EducationalResource,
   Substance,
   SUBSTANCES
 } from './models/types.js';
@@ -63,6 +65,28 @@ app.use((req: Request, _res: Response, next: NextFunction) => {
 // ============================================
 // API ROUTES
 // ============================================
+
+/** Split "Robin L. Carhart-Harris" → { first: 'robin', last: 'carhart-harris' } */
+function normalizeAuthor(name: string): { first?: string; last?: string } {
+  const cleaned = name.trim().replace(/\s+/g, ' ');
+  if (!cleaned) return {};
+  if (cleaned.includes(',')) {
+    // "Carhart-Harris, Robin"
+    const [last, rest] = cleaned.split(',').map(s => s.trim().toLowerCase());
+    return { last, first: rest?.split(' ')[0] };
+  }
+  const parts = cleaned.toLowerCase().split(' ');
+  return { last: parts[parts.length - 1], first: parts.length > 1 ? parts[0] : undefined };
+}
+
+/** PubMed stores "Carhart-Harris R"; Europe PMC "Carhart-Harris RL"; curated "Robin Carhart-Harris" */
+function authorMatches(stored: string, wanted: { first?: string; last?: string }): boolean {
+  const s = stored.toLowerCase().replace(/\s+/g, ' ').trim();
+  if (!wanted.last || !s.includes(wanted.last)) return false;
+  if (!wanted.first) return true;
+  const rest = s.replace(wanted.last, ' ').trim();
+  return rest === '' || rest.startsWith(wanted.first) || rest.startsWith(wanted.first[0]) || rest.endsWith(` ${wanted.first[0]}`) || rest.includes(` ${wanted.first}`);
+}
 
 /**
  * Health check endpoint
@@ -186,23 +210,43 @@ app.get('/api/research', async (req: Request, res: Response) => {
       filtered = filtered.filter(p => p.year === year);
     }
 
-    if (req.query.search) {
-      const search = (req.query.search as string).toLowerCase();
-      filtered = filtered.filter(p =>
-        p.title.toLowerCase().includes(search) ||
-        p.abstract?.toLowerCase().includes(search) ||
-        p.authors.some(a => a.name.toLowerCase().includes(search))
-      );
+    // author=Robin Carhart-Harris — matches "Carhart-Harris R", "Robin Carhart-Harris", etc.
+    if (req.query.author) {
+      const wanted = normalizeAuthor(req.query.author as string);
+      if (wanted.last) {
+        filtered = filtered.filter(p => p.authors.some(a => authorMatches(a.name, wanted)));
+      }
     }
 
-    // Sort by year (newest first)
-    filtered.sort((a, b) => (b.year || 0) - (a.year || 0));
+    if (req.query.type === 'preprint') {
+      filtered = filtered.filter(p => p.publicationType?.includes('Preprint'));
+    } else if (req.query.type === 'peer-reviewed') {
+      filtered = filtered.filter(p => !p.publicationType?.includes('Preprint'));
+    }
+
+    if (req.query.search) {
+      const search = (req.query.search as string).toLowerCase();
+      const words = search.split(/\s+/).filter(w => w.length > 1);
+      filtered = filtered.filter(p => {
+        const haystack = `${p.title} ${p.abstract || ''} ${p.journal || ''} ${p.authors.map(a => a.name).join(' ')} ${(p.keywords || []).join(' ')}`.toLowerCase();
+        return words.length > 0 ? words.every(w => haystack.includes(w)) : haystack.includes(search);
+      });
+    }
+
+    // Sort newest first (date, then year)
+    filtered.sort((a, b) => (b.publicationDate || `${b.year || 0}`).localeCompare(a.publicationDate || `${a.year || 0}`));
 
     // Pagination
     const page = parseInt(req.query.page as string) || 1;
-    const limit = parseInt(req.query.limit as string) || 50;
+    const limit = Math.min(parseInt(req.query.limit as string) || 50, 500);
     const start = (page - 1) * limit;
-    const paginated = filtered.slice(start, start + limit);
+    // Abstracts dominate payload size; list responses carry a preview unless full=1
+    const full = req.query.full === '1' || req.query.full === 'true';
+    const paginated = filtered.slice(start, start + limit).map(p =>
+      full || !p.abstract || p.abstract.length <= 400
+        ? p
+        : { ...p, abstract: `${p.abstract.slice(0, 400).trimEnd()}…` }
+    );
 
     res.json({
       data: paginated,
@@ -521,7 +565,10 @@ app.get('/api/events/:id', async (req: Request, res: Response) => {
 
 app.get('/api/education', async (req: Request, res: Response) => {
   try {
-    const courses = await storage.load<Record<string, string>>('educational_resources');
+    // Curated rows carry a few display fields beyond the schema (level,
+    // category, price string); read them loosely.
+    type CourseRow = EducationalResource & Record<string, string | undefined>;
+    const courses = (await storage.load<EducationalResource>('educational_resources')) as unknown as CourseRow[];
     let filtered = courses;
 
     if (req.query.level) {
@@ -559,6 +606,80 @@ app.get('/api/education', async (req: Request, res: Response) => {
 });
 
 // ============================================
+// CARE PROVIDERS
+// ============================================
+
+/**
+ * Care directory: state-licensed service centers + curated clinics.
+ * Query params: type, state, country, substance, search, verified, page, limit
+ */
+app.get('/api/care', async (req: Request, res: Response) => {
+  try {
+    const providers = await storage.load<CareProvider>('care_providers');
+    let filtered = providers;
+
+    if (req.query.type) {
+      const type = (req.query.type as string).toLowerCase();
+      filtered = filtered.filter(p => p.type.toLowerCase() === type);
+    }
+    if (req.query.state) {
+      const state = (req.query.state as string).toLowerCase();
+      filtered = filtered.filter(p => p.location?.state?.toLowerCase() === state);
+    }
+    if (req.query.country) {
+      const country = (req.query.country as string).toLowerCase();
+      filtered = filtered.filter(p => p.location?.country?.toLowerCase() === country);
+    }
+    if (req.query.substance) {
+      const substance = (req.query.substance as string).toLowerCase();
+      filtered = filtered.filter(p => p.substances.some(s => s.toLowerCase().includes(substance)));
+    }
+    if (req.query.verified === 'true') {
+      filtered = filtered.filter(p => p.verified);
+    }
+    if (req.query.search) {
+      const search = (req.query.search as string).toLowerCase();
+      filtered = filtered.filter(p =>
+        p.name.toLowerCase().includes(search) ||
+        p.description?.toLowerCase().includes(search) ||
+        p.location?.city?.toLowerCase().includes(search) ||
+        p.services?.some(s => s.toLowerCase().includes(search))
+      );
+    }
+
+    // Licensed / verified rows first, then alphabetical
+    filtered.sort((a, b) => Number(b.verified) - Number(a.verified) || a.name.localeCompare(b.name));
+
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = parseInt(req.query.limit as string) || 50;
+    const start = (page - 1) * limit;
+
+    res.json({
+      data: filtered.slice(start, start + limit),
+      total: filtered.length,
+      page,
+      limit,
+      totalPages: Math.ceil(filtered.length / limit)
+    });
+  } catch (error) {
+    logger.error(`Error fetching care providers: ${error}`);
+    res.status(500).json({ error: 'Failed to fetch care providers' });
+  }
+});
+
+app.get('/api/care/:id', async (req: Request, res: Response) => {
+  try {
+    const providers = await storage.load<CareProvider>('care_providers');
+    const provider = providers.find(p => p.id === req.params.id);
+    if (!provider) return res.status(404).json({ error: 'Care provider not found' });
+    res.json(provider);
+  } catch (error) {
+    logger.error(`Error fetching care provider: ${error}`);
+    res.status(500).json({ error: 'Failed to fetch care provider' });
+  }
+});
+
+// ============================================
 // AGGREGATE ENDPOINTS
 // ============================================
 
@@ -567,14 +688,18 @@ app.get('/api/education', async (req: Request, res: Response) => {
  */
 app.get('/api/dashboard', async (_req: Request, res: Response) => {
   try {
-    const [trials, papers, companies, people, jobs, events, education] = await Promise.all([
+    const [trials, papers, companies, people, jobs, events, education, legislation, funding, grants, care] = await Promise.all([
       storage.load<ClinicalTrial>('clinical_trials'),
       storage.load<ResearchPaper>('research_papers'),
       storage.load<Company>('companies'),
       storage.load<Person>('people'),
       storage.load<JobPosting>('jobs'),
       storage.load<Event>('events'),
-      storage.load('educational_resources')
+      storage.load('educational_resources'),
+      storage.load<LegislationBill>('legislation'),
+      storage.load<FundingEvent>('funding_events'),
+      storage.load<Grant>('grants'),
+      storage.load<CareProvider>('care_providers')
     ]);
 
     // Get upcoming events
@@ -592,22 +717,31 @@ app.get('/api/dashboard', async (_req: Request, res: Response) => {
       })
       .slice(0, 10);
 
-    // Get substance statistics
+    // Get substance statistics (trials and papers per substance)
     const substanceStats: Record<string, number> = {};
+    const substancePapers: Record<string, number> = {};
     for (const substance of SUBSTANCES) {
       substanceStats[substance] = trials.filter(t => t.substances.includes(substance)).length;
+      substancePapers[substance] = papers.filter(p => p.substances.includes(substance)).length;
     }
 
     res.json({
       counts: {
         clinicalTrials: trials.length,
         researchPapers: papers.length,
+        preprints: papers.filter(p => p.publicationType?.includes('Preprint')).length,
         companies: companies.length,
         people: people.length,
         jobs: jobs.length,
         events: events.length,
-        educationalResources: education.length
+        educationalResources: education.length,
+        legislation: legislation.length,
+        fundingEvents: funding.length,
+        grants: grants.length,
+        careProviders: care.length,
+        licensedCareProviders: care.filter(c => c.verified).length
       },
+      substancePapers,
       upcomingEvents,
       recentJobs,
       substanceStats,
@@ -631,16 +765,31 @@ app.get('/api/search', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Query must be at least 2 characters' });
     }
 
-    const [trials, papers, companies, people, jobs, events] = await Promise.all([
+    const [trials, papers, companies, people, jobs, events, legislation, grants, care] = await Promise.all([
       storage.load<ClinicalTrial>('clinical_trials'),
       storage.load<ResearchPaper>('research_papers'),
       storage.load<Company>('companies'),
       storage.load<Person>('people'),
       storage.load<JobPosting>('jobs'),
-      storage.load<Event>('events')
+      storage.load<Event>('events'),
+      storage.load<LegislationBill>('legislation'),
+      storage.load<Grant>('grants'),
+      storage.load<CareProvider>('care_providers')
     ]);
 
     const results = {
+      legislation: legislation.filter(l =>
+        l.title.toLowerCase().includes(query) ||
+        l.description?.toLowerCase().includes(query)
+      ).slice(0, 10),
+      grants: grants.filter(g =>
+        g.title.toLowerCase().includes(query) ||
+        g.piNames.some(n => n.toLowerCase().includes(query))
+      ).slice(0, 10),
+      careProviders: care.filter(c =>
+        c.name.toLowerCase().includes(query) ||
+        c.location?.city?.toLowerCase().includes(query)
+      ).slice(0, 10),
       clinicalTrials: trials.filter(t =>
         t.title.toLowerCase().includes(query) ||
         t.briefSummary?.toLowerCase().includes(query)

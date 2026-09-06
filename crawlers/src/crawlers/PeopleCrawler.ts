@@ -4,14 +4,68 @@ import {
   Person,
   PersonSchema,
   Substance,
-  SUBSTANCES
+  SUBSTANCES,
+  ClinicalTrial,
+  Grant,
+  ResearchPaper
 } from '../models/types.js';
 import { logger } from '../utils/logger.js';
 
+export interface PeopleCrawlerOptions {
+  /** Stored trials: principal investigators and study officials */
+  trials?: ClinicalTrial[];
+  /** Stored NIH grants: principal investigators */
+  grants?: Grant[];
+  /** Stored papers: prolific authors in the corpus */
+  papers?: ResearchPaper[];
+  /** Minimum papers in the corpus before an author is listed (default 5) */
+  minPapers?: number;
+  /** Skip PubMed publication-count lookups (tests / offline) */
+  skipPubMed?: boolean;
+}
+
+/** Degrees and honorifics trailing a name on ClinicalTrials.gov ("Jane Doe, MD, PhD") */
+const CREDENTIALS = /\s*,?\s*\b(m\.?d\.?|ph\.?d\.?|d\.?o\.?|psy\.?d\.?|m\.?p\.?h\.?|m\.?s\.?c?\.?|m\.?a\.?|r\.?n\.?|b\.?sc?\.?|pharm\.?d\.?|f\.?r\.?c\.?p\.?c?\.?|m\.?b\.?b\.?s\.?|dr\.?|prof\.?|professor|associate professor|assistant professor|md-phd|np|pa-c|lcsw|lmft|mph|msc|mba|ms|ma|rn|bsn|dnp|frcpc|frcp|facs|faan)\b\.?/gi;
+
+/** Strings that are organisations, hotlines or roles rather than people */
+const NOT_A_PERSON = /\b(call|trial|trials|pharmaceutical|pharma|department|dept|clinical|office|contact|team|group|study|site|coordinator|hospital|university|institute|center|centre|clinic|inc|llc|ltd|k\.k\.|foundation|research|services|laborator|assist|resident|residant|student|nurse|investigator|physician|professor|program|committee|unit|division|company|corporation|hotline|information)\b/i;
+
 /**
- * Crawler for researcher and key people data in the psychedelic medicine field
- * Combines known key figures with PubMed author data
+ * Normalise a person's name for cross-source matching.
+ * ClinicalTrials.gov officials arrive as "Jane Q Doe, MD, PhD" — everything
+ * after the first comma is credentials unless the name is "Last, First".
+ * Returns '' when the string is not a plausible person name.
  */
+export function normalizePersonName(name: string): string {
+  let text = cleanText(name) || '';
+  text = text.replace(/\(.*?\)/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+
+  const commaParts = text.split(',').map(p => p.trim()).filter(Boolean);
+  if (commaParts.length > 1) {
+    const [head, second] = commaParts;
+    // "Doe, Jane" → "Jane Doe"; otherwise drop the credential tail
+    text = head.split(' ').length === 1 && /^[A-Z][a-z]+(\s[A-Z]\.?)?$/.test(second) && !CREDENTIALS.test(second)
+      ? `${second} ${head}`
+      : head;
+  }
+
+  text = text
+    .replace(/^(dr|prof|professor|mr|mrs|ms|mx)\.?\s+/i, '')
+    .replace(CREDENTIALS, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/[,;:\-\s]+$/, '');
+
+  if (!text || /\d/.test(text)) return '';
+  const words = text.split(' ');
+  if (words.length < 2 || words.length > 5) return '';
+  if (NOT_A_PERSON.test(text)) return '';
+  // Every word should look like a name part (letters, hyphens, apostrophes, initials)
+  if (!words.every(w => /^[\p{L}][\p{L}'’\-.]*$/u.test(w))) return '';
+  return text;
+}
+
 export class PeopleCrawler extends BaseCrawler<Person> {
   // Known key figures in psychedelic medicine
   private static readonly KEY_FIGURES: Partial<Person>[] = [
@@ -491,7 +545,9 @@ export class PeopleCrawler extends BaseCrawler<Person> {
 
   private xmlParser: XMLParser;
 
-  constructor() {
+  private readonly options: PeopleCrawlerOptions;
+
+  constructor(options: PeopleCrawlerOptions = {}) {
     super({
       name: 'PeopleCrawler',
       baseUrl: 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils',
@@ -505,6 +561,7 @@ export class PeopleCrawler extends BaseCrawler<Person> {
       ignoreAttributes: false,
       attributeNamePrefix: '@_'
     });
+    this.options = options;
   }
 
   /**
@@ -523,11 +580,12 @@ export class PeopleCrawler extends BaseCrawler<Person> {
         const personData: Partial<Person> = {
           ...figure,
           id: this.generateId('per', this.slugify(figure.name || '')),
+          source: 'Curated',
           crawledAt: this.getTimestamp()
         };
 
         // Try to fetch additional publication data from PubMed if we have their name
-        if (figure.name && figure.role === 'Researcher') {
+        if (figure.name && figure.role === 'Researcher' && !this.options.skipPubMed) {
           try {
             const pubData = await this.fetchPubMedAuthorData(figure.name);
             if (pubData) {
@@ -548,6 +606,25 @@ export class PeopleCrawler extends BaseCrawler<Person> {
       } catch (error) {
         errors.push(`Failed to process ${figure.name}: ${error instanceof Error ? error.message : 'Unknown error'}`);
       }
+    }
+
+    // Derived people: investigators, grant PIs, prolific authors. Curated
+    // entries win on collisions; derived records carry their evidence.
+    const seen = new Set(people.map(p => normalizePersonName(p.name).toLowerCase()));
+    const derived = this.derivePeople();
+    let added = 0;
+    for (const person of derived) {
+      const key = normalizePersonName(person.name || '').toLowerCase();
+      if (!key || seen.has(key)) continue;
+      const validated = this.validate({ ...person, crawledAt: this.getTimestamp() });
+      if (validated) {
+        people.push(validated);
+        seen.add(key);
+        added++;
+      }
+    }
+    if (added > 0) {
+      logger.info(`[PeopleCrawler] ${added} people derived from stored trials, grants and papers`);
     }
 
     // Filter by query if provided
@@ -576,6 +653,93 @@ export class PeopleCrawler extends BaseCrawler<Person> {
         duration: Date.now() - startTime
       }
     };
+  }
+
+  /**
+   * Build people records from the datasets already in the database:
+   *  - ClinicalTrials.gov overall officials (principal investigators)
+   *  - NIH RePORTER principal investigators
+   *  - Authors with at least `minPapers` papers in the stored corpus
+   * Each record lists the evidence (NCT ids, grant numbers, paper counts).
+   */
+  private derivePeople(): Partial<Person>[] {
+    const byName = new Map<string, Partial<Person> & { evidence: string[]; expertiseSet: Set<Substance>; sources: Set<string> }>();
+
+    const upsert = (rawName: string, patch: Partial<Person>, evidence: string, source: string, substances: Substance[]) => {
+      const name = normalizePersonName(rawName);
+      if (!name || name.length > 80) return;
+      const key = name.toLowerCase();
+      const current = byName.get(key) ?? {
+        id: this.generateId('per', this.slugify(name)),
+        name,
+        role: 'Researcher' as Person['role'],
+        evidence: [],
+        expertiseSet: new Set<Substance>(),
+        sources: new Set<string>()
+      };
+      current.title = current.title || patch.title;
+      current.organization = current.organization || patch.organization;
+      current.researchAreas = Array.from(new Set([...(current.researchAreas || []), ...(patch.researchAreas || [])])).slice(0, 12);
+      if (patch.publications?.count && !current.publications?.count) current.publications = patch.publications;
+      if (evidence && current.evidence.length < 30) current.evidence.push(evidence);
+      for (const s of substances) if (s !== 'Other') current.expertiseSet.add(s);
+      current.sources.add(source);
+      byName.set(key, current);
+    };
+
+    for (const trial of this.options.trials ?? []) {
+      for (const official of trial.officials ?? []) {
+        if (!official.name) continue;
+        const role = official.role || 'Investigator';
+        upsert(official.name, {
+          title: role.replace(/\b\w/g, ch => ch.toUpperCase()),
+          organization: official.affiliation,
+          researchAreas: trial.conditions.slice(0, 3)
+        }, `${role} on ${trial.nctId}`, 'ClinicalTrials.gov', trial.substances);
+      }
+    }
+
+    for (const grant of this.options.grants ?? []) {
+      for (const pi of grant.piNames) {
+        upsert(pi, {
+          title: 'Principal Investigator',
+          organization: grant.organization
+        }, `PI on NIH ${grant.projectNumber}`, 'NIH RePORTER', grant.substances);
+      }
+    }
+
+    const minPapers = this.options.minPapers ?? 5;
+    const authorCounts = new Map<string, { name: string; count: number; affiliation?: string; substances: Set<Substance>; areas: Map<string, number> }>();
+    for (const paper of this.options.papers ?? []) {
+      for (const author of paper.authors) {
+        const name = normalizePersonName(author.name);
+        // PubMed stores "Doe JQ" — an initials-only surname form is not a display name
+        if (!name || /^et al/i.test(name) || /\b[A-Z]{1,3}$/.test(name)) continue;
+        const key = name.toLowerCase();
+        const entry = authorCounts.get(key) ?? { name, count: 0, affiliation: undefined, substances: new Set<Substance>(), areas: new Map() };
+        entry.count++;
+        entry.affiliation = entry.affiliation || cleanText(author.affiliation);
+        for (const s of paper.substances) entry.substances.add(s);
+        for (const k of paper.keywords ?? []) entry.areas.set(k, (entry.areas.get(k) ?? 0) + 1);
+        authorCounts.set(key, entry);
+      }
+    }
+    for (const entry of authorCounts.values()) {
+      if (entry.count < minPapers) continue;
+      const areas = Array.from(entry.areas.entries()).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([k]) => k);
+      upsert(entry.name, {
+        organization: entry.affiliation?.split(/[,;]/)[0]?.trim().slice(0, 120),
+        researchAreas: areas,
+        publications: { count: entry.count }
+      }, `${entry.count} papers in the Neuly corpus`, 'PubMed author corpus', Array.from(entry.substances));
+    }
+
+    return Array.from(byName.values()).map(({ evidence, expertiseSet, sources, ...person }) => ({
+      ...person,
+      expertise: expertiseSet.size > 0 ? Array.from(expertiseSet) : undefined,
+      evidence,
+      source: Array.from(sources).join('; ')
+    }));
   }
 
   /**

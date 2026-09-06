@@ -2,10 +2,13 @@ import { describe, it, expect } from 'vitest';
 import { BaseCrawler, CrawlResult } from './BaseCrawler.js';
 import { CrawledData } from '../models/types.js';
 
-interface StubItem extends CrawledData {
+// Minimal shape for the dedupe test; cast into the entity union at the class
+// boundary because BaseCrawler is generic over CrawledData.
+interface StubItem {
   id: string;
   crawledAt: string;
 }
+type StubEntity = StubItem & CrawledData;
 
 /**
  * The same entity routinely matches several search queries. run() must
@@ -13,20 +16,23 @@ interface StubItem extends CrawledData {
  * INSERT ... ON CONFLICT statement are a hard error
  * ("ON CONFLICT DO UPDATE command cannot affect row a second time").
  */
-class StubCrawler extends BaseCrawler<StubItem> {
+class StubCrawler extends BaseCrawler<StubEntity> {
   constructor(private resultsByQuery: Record<string, string[]>) {
     super({ name: 'Stub', baseUrl: 'http://localhost' });
   }
 
-  async crawl(query: string): Promise<CrawlResult<StubItem>> {
+  async crawl(query: string): Promise<CrawlResult<StubEntity>> {
     const ids = this.resultsByQuery[query] ?? [];
-    const data = ids.map(id => ({ id, crawledAt: new Date().toISOString() }));
+    const data = ids.map(id => ({ id, crawledAt: new Date().toISOString() }) as StubEntity);
     return {
       success: true,
       data,
       stats: { total: data.length, successful: data.length, failed: 0, duration: 0 }
     };
   }
+
+  transform(raw: unknown): Partial<StubEntity> { return raw as Partial<StubEntity>; }
+  validate(data: unknown): StubEntity | null { return data as StubEntity; }
 }
 
 describe('BaseCrawler.run cross-query deduplication', () => {

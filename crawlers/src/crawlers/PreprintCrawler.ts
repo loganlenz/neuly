@@ -1,152 +1,153 @@
 import { BaseCrawler, CrawlResult, cleanText } from '../core/BaseCrawler.js';
 import { ResearchPaper, ResearchPaperSchema } from '../models/types.js';
-import { detectSubstances } from '../utils/substances.js';
+import { detectSubstances, SUBSTANCE_QUERY_TERMS } from '../utils/substances.js';
 import { logger } from '../utils/logger.js';
 
-interface BiorxivRecord {
+/** Europe PMC REST search result (resultType=core) */
+interface EuropePmcResult {
+  id?: string; // e.g. PPR1307002
+  source?: string; // 'PPR' for preprints
   doi?: string;
   title?: string;
-  authors?: string; // "Last, F.; Last, F."
-  author_corresponding_institution?: string;
-  date?: string; // YYYY-MM-DD
-  category?: string;
-  abstract?: string;
-  server?: string;
-  version?: string;
-  published?: string; // journal DOI once published, or "NA"
+  authorString?: string; // "Last F, Last F."
+  authorList?: { author?: Array<{ fullName?: string; firstName?: string; lastName?: string; affiliation?: string }> };
+  firstPublicationDate?: string; // YYYY-MM-DD
+  pubYear?: string | number;
+  abstractText?: string;
+  keywordList?: { keyword?: string[] };
+  bookOrReportDetails?: { publisher?: string };
+  isOpenAccess?: string; // 'Y' | 'N'
+  citedByCount?: number;
+  fullTextUrlList?: { fullTextUrl?: Array<{ url?: string; documentStyle?: string }> };
 }
 
-interface BiorxivResponse {
-  messages?: Array<{ status?: string; count?: number; total?: number; cursor?: string | number }>;
-  collection?: BiorxivRecord[];
+interface EuropePmcResponse {
+  hitCount?: number;
+  nextCursorMark?: string;
+  resultList?: { result?: EuropePmcResult[] };
 }
 
 /**
- * Crawler for bioRxiv and medRxiv preprints. The details API has no
- * keyword search, so we sweep a rolling window of recent posts and keep
- * the ones mentioning tracked substances. Preprints surface research
- * 6-18 months before it lands in PubMed.
+ * Preprint crawler — research 6-18 months ahead of the journals.
  *
- * Output feeds the shared `research_papers` data type with
- * publicationType ['Preprint'].
+ * Europe PMC indexes preprints from bioRxiv, medRxiv, Research Square,
+ * SSRN, Preprints.org, PsyArXiv and more, and supports term search, so a
+ * per-substance query finds every relevant preprint directly instead of
+ * paging through every life-science preprint posted in the last month.
+ * API docs: https://europepmc.org/RestfulWebService
  */
 export class PreprintCrawler extends BaseCrawler<ResearchPaper> {
-  private static readonly SERVERS = ['biorxiv', 'medrxiv'] as const;
-  /** How far back each crawl sweeps */
-  private static readonly WINDOW_DAYS = 30;
-  /** Page cap per server per crawl (100 records/page) */
-  private static readonly MAX_PAGES = 30;
+  private static readonly PAGE_SIZE = 100;
+  /** Pages per query term (100 records each) */
+  private static readonly MAX_PAGES = 5;
 
   constructor() {
     super({
       name: 'PreprintCrawler',
-      baseUrl: 'https://api.biorxiv.org',
-      rateLimit: 1,
+      baseUrl: 'https://www.ebi.ac.uk/europepmc/webservices/rest',
+      rateLimit: 3,
       concurrency: 1,
       retries: 3,
       timeout: 60000
     });
   }
 
-  async crawl(_query?: string): Promise<CrawlResult<ResearchPaper>> {
-    const papers: ResearchPaper[] = [];
+  async crawl(query?: string): Promise<CrawlResult<ResearchPaper>> {
+    const papers = new Map<string, ResearchPaper>();
     const errors: string[] = [];
     const startTime = Date.now();
+    const terms = query ? [query] : PreprintCrawler.getDefaultQueries();
 
-    const end = new Date();
-    const start = new Date(end.getTime() - PreprintCrawler.WINDOW_DAYS * 24 * 60 * 60 * 1000);
-    const interval = `${this.isoDay(start)}/${this.isoDay(end)}`;
-
-    for (const server of PreprintCrawler.SERVERS) {
+    for (const term of terms) {
       try {
-        const serverPapers = await this.crawlServer(server, interval);
-        papers.push(...serverPapers);
-        logger.info(`[PreprintCrawler] ${server}: kept ${serverPapers.length} relevant preprints`);
+        const found = await this.searchTerm(term);
+        for (const paper of found) papers.set(paper.id, paper);
+        logger.info(`[PreprintCrawler] "${term}": ${found.length} preprints`);
       } catch (error) {
-        errors.push(`${server} failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        errors.push(`Europe PMC "${term}" failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
       }
     }
 
     return {
       success: errors.length === 0,
-      data: papers,
+      data: Array.from(papers.values()),
       errors: errors.length > 0 ? errors : undefined,
       stats: {
-        total: papers.length + errors.length,
-        successful: papers.length,
+        total: papers.size + errors.length,
+        successful: papers.size,
         failed: errors.length,
         duration: Date.now() - startTime
       }
     };
   }
 
-  /**
-   * Page through /details/{server}/{from}/{to}/{cursor} keeping
-   * substance-relevant records.
-   * API docs: https://api.biorxiv.org
-   */
-  private async crawlServer(server: string, interval: string): Promise<ResearchPaper[]> {
+  private async searchTerm(term: string): Promise<ResearchPaper[]> {
     const papers: ResearchPaper[] = [];
-    let cursor = 0;
-
+    let cursor = '*';
     for (let page = 0; page < PreprintCrawler.MAX_PAGES; page++) {
-      const response = await this.request<BiorxivResponse>(`/details/${server}/${interval}/${cursor}`);
-      const records = response.collection || [];
-      if (records.length === 0) break;
-
-      for (const record of records) {
-        const text = `${record.title || ''} ${record.abstract || ''}`;
+      const response = await this.request<EuropePmcResponse>('/search', {
+        params: {
+          query: `(${term}) AND (SRC:PPR)`,
+          format: 'json',
+          resultType: 'core',
+          pageSize: PreprintCrawler.PAGE_SIZE,
+          sort: 'FIRST_PDATE_D desc',
+          cursorMark: cursor
+        }
+      });
+      const results = response.resultList?.result ?? [];
+      for (const record of results) {
+        const text = `${record.title || ''} ${record.abstractText || ''}`;
         const substances = detectSubstances(text);
         if (substances.length === 0) continue;
-
-        const transformed = this.transformRecord(record, server, substances);
-        const validated = this.validate(transformed);
+        const validated = this.validate(this.transformRecord(record, substances));
         if (validated) papers.push(validated);
       }
-
-      const message = response.messages?.[0];
-      const total = message?.total ?? 0;
-      cursor += records.length;
-      if (cursor >= total || records.length < 100) break;
+      if (results.length < PreprintCrawler.PAGE_SIZE || !response.nextCursorMark || response.nextCursorMark === cursor) break;
+      cursor = response.nextCursorMark;
     }
-
     return papers;
   }
 
-  private transformRecord(
-    record: BiorxivRecord,
-    server: string,
-    substances: ResearchPaper['substances']
-  ): Partial<ResearchPaper> {
-    const doiSlug = (record.doi || '').replace(/[^a-zA-Z0-9]+/g, '-');
-    const authors = (record.authors || '')
-      .split(';')
-      .map(a => cleanText(a))
+  private transformRecord(record: EuropePmcResult, substances: ResearchPaper['substances']): Partial<ResearchPaper> {
+    const doi = record.doi?.trim();
+    const idBase = doi ? doi.replace(/[^a-zA-Z0-9]+/g, '-') : `epmc-${record.id}`;
+
+    const authors = (record.authorList?.author ?? [])
+      .map(a => ({
+        name: cleanText(a.fullName || [a.firstName, a.lastName].filter(Boolean).join(' ')) || '',
+        affiliation: cleanText(a.affiliation)
+      }))
+      .filter(a => a.name);
+    const fallbackAuthors = (record.authorString || '')
+      .split(/,\s*|;\s*/)
+      .map(a => cleanText(a.replace(/\.$/, '')))
       .filter((a): a is string => Boolean(a))
       .map(name => ({ name }));
 
-    const year = record.date ? parseInt(record.date.slice(0, 4), 10) : undefined;
-    const journalLabel = server === 'biorxiv' ? 'bioRxiv' : 'medRxiv';
+    const year = record.pubYear ? parseInt(String(record.pubYear), 10) : record.firstPublicationDate ? parseInt(record.firstPublicationDate.slice(0, 4), 10) : undefined;
+    const server = record.bookOrReportDetails?.publisher || 'Preprint server';
+    const url = doi
+      ? `https://doi.org/${doi}`
+      : record.id ? `https://europepmc.org/article/PPR/${record.id}` : undefined;
 
     return {
-      id: this.generateId('pp', doiSlug),
-      doi: record.doi,
+      id: this.generateId('pp', idBase),
+      doi,
       title: cleanText(record.title) || record.title || 'Untitled preprint',
-      authors,
-      journal: journalLabel,
-      publicationDate: record.date,
-      year: Number.isNaN(year) ? undefined : year,
-      abstract: cleanText(record.abstract)?.slice(0, 5000),
+      authors: authors.length > 0 ? authors : fallbackAuthors,
+      journal: server,
+      publicationDate: record.firstPublicationDate,
+      year: year !== undefined && !Number.isNaN(year) ? year : undefined,
+      abstract: cleanText(record.abstractText)?.slice(0, 5000),
+      keywords: record.keywordList?.keyword?.slice(0, 20),
       substances,
+      citationCount: typeof record.citedByCount === 'number' ? record.citedByCount : undefined,
       publicationType: ['Preprint'],
       isOpenAccess: true,
-      url: record.doi ? `https://doi.org/${record.doi}` : undefined,
+      url,
       crawledAt: this.getTimestamp()
     };
-  }
-
-  private isoDay(date: Date): string {
-    return date.toISOString().split('T')[0];
   }
 
   transform(rawData: unknown): Partial<ResearchPaper> {
@@ -160,5 +161,12 @@ export class PreprintCrawler extends BaseCrawler<ResearchPaper> {
       logger.warn(`[PreprintCrawler] Validation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
       return null;
     }
+  }
+
+  static getDefaultQueries(): string[] {
+    return [
+      ...SUBSTANCE_QUERY_TERMS.filter(t => t !== 'psychedelic'),
+      'psychedelic', 'esketamine', '"5-MeO-DMT"', 'psilocin', 'cannabidiol'
+    ];
   }
 }

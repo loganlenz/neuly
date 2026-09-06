@@ -60,6 +60,7 @@ Usage:
   npm run crawl:jobs             Crawl job postings
   npm run crawl:events           Crawl events and conferences
   npm run crawl:people           Crawl researcher profiles
+  npm run crawl:care             Crawl licensed care providers
   npm run schedule               Run the crawl scheduler (per-source cadence)
   npm run db:migrate             Apply the Postgres schema (DATABASE_URL)
 
@@ -67,7 +68,7 @@ Options:
   --crawler, -c <name>    Specify crawler to run
                           Options: clinicaltrials, pubmed, companies,
                                    jobs, events, people, legislation,
-                                   funding, preprints, grants, openalex, all
+                                   funding, preprints, grants, care, openalex, all
   --query, -q <query>     Custom search query
   --output, -o <dir>      Output directory (default: ./data)
   --dry-run               Don't save results
@@ -137,6 +138,7 @@ export { LegislationCrawler } from './crawlers/LegislationCrawler.js';
 export { FundingCrawler } from './crawlers/FundingCrawler.js';
 export { PreprintCrawler } from './crawlers/PreprintCrawler.js';
 export { GrantsCrawler } from './crawlers/GrantsCrawler.js';
+export { CareCrawler } from './crawlers/CareCrawler.js';
 export { OpenAlexEnricher } from './enrichment/OpenAlexEnricher.js';
 export { DiffEngine } from './core/DiffEngine.js';
 export { deriveReadoutCalendar } from './core/readouts.js';

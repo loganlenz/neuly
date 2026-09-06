@@ -24,6 +24,28 @@ export interface JobCrawlerOptions {
  * Crawls a set of seed ATS boards plus any boards auto-discovered from
  * the companies table via the public Greenhouse/Lever/Ashby/Workable APIs.
  */
+/** Full US state names (lower-cased) → postal codes, for ATS location strings */
+const US_STATES: Record<string, string> = {
+  alabama: 'AL', alaska: 'AK', arizona: 'AZ', arkansas: 'AR', california: 'CA', colorado: 'CO',
+  connecticut: 'CT', delaware: 'DE', florida: 'FL', georgia: 'GA', hawaii: 'HI', idaho: 'ID',
+  illinois: 'IL', indiana: 'IN', iowa: 'IA', kansas: 'KS', kentucky: 'KY', louisiana: 'LA',
+  maine: 'ME', maryland: 'MD', massachusetts: 'MA', michigan: 'MI', minnesota: 'MN',
+  mississippi: 'MS', missouri: 'MO', montana: 'MT', nebraska: 'NE', nevada: 'NV',
+  'new hampshire': 'NH', 'new jersey': 'NJ', 'new mexico': 'NM', 'new york': 'NY',
+  'north carolina': 'NC', 'north dakota': 'ND', ohio: 'OH', oklahoma: 'OK', oregon: 'OR',
+  pennsylvania: 'PA', 'rhode island': 'RI', 'south carolina': 'SC', 'south dakota': 'SD',
+  tennessee: 'TN', texas: 'TX', utah: 'UT', vermont: 'VT', virginia: 'VA', washington: 'WA',
+  'west virginia': 'WV', wisconsin: 'WI', wyoming: 'WY', 'district of columbia': 'DC'
+};
+
+/** Country names that show up alone in ATS location fields */
+const COUNTRY_NAMES = new Set([
+  'united states', 'usa', 'us', 'united kingdom', 'uk', 'canada', 'germany', 'netherlands',
+  'switzerland', 'australia', 'ireland', 'france', 'spain', 'italy', 'israel', 'india',
+  'japan', 'brazil', 'mexico', 'sweden', 'denmark', 'norway', 'finland', 'belgium', 'austria',
+  'portugal', 'poland', 'czech republic', 'new zealand', 'singapore', 'south africa', 'jamaica'
+]);
+
 export class JobCrawler extends BaseCrawler<JobPosting> {
   // Boards that are always crawled, independent of discovery
   private static readonly SEED_BOARDS: AtsBoard[] = [
@@ -441,31 +463,46 @@ export class JobCrawler extends BaseCrawler<JobPosting> {
    * Parse location string into structured format
    */
   private parseLocation(locationStr: string): JobPosting['location'] {
-    const isRemote = /remote|work from home|wfh|anywhere/i.test(locationStr);
+    const raw = cleanText(locationStr) || '';
+    const isRemote = /remote|work from home|wfh|anywhere/i.test(raw);
+    // Strip "Remote - " / "(Remote)" decorations before splitting
+    const text = raw.replace(/\(?\bremote\b\)?\s*[-–:]?\s*/gi, '').replace(/\s*[-–]\s*$/, '').trim();
+    if (!text) return { remote: isRemote };
 
-    // Common location patterns
-    const patterns = [
-      // "City, State, Country"
-      /^(.+?),\s*([A-Z]{2}),?\s*(.+)?$/i,
-      // "City, Country"
-      /^(.+?),\s*(.+)$/,
-      // Just city or country
-      /^(.+)$/
-    ];
+    const parts = text.split(',').map(p => p.trim()).filter(Boolean);
+    if (parts.length === 0) return { remote: isRemote };
 
-    for (const pattern of patterns) {
-      const match = locationStr.match(pattern);
-      if (match) {
-        return {
-          city: match[1]?.trim(),
-          state: match[2]?.length === 2 ? match[2].toUpperCase() : undefined,
-          country: match[3]?.trim() || (match[2]?.length > 2 ? match[2].trim() : undefined),
-          remote: isRemote
-        };
-      }
+    // A US state is a bare two-letter code ("NJ") or a full state name
+    const stateCode = (part: string): string | undefined => {
+      if (/^[A-Z]{2}$/.test(part)) return part;
+      const full = US_STATES[part.toLowerCase()];
+      return full;
+    };
+
+    if (parts.length === 1) {
+      const state = stateCode(parts[0]);
+      if (state) return { state, country: 'United States', remote: isRemote };
+      if (COUNTRY_NAMES.has(parts[0].toLowerCase())) return { country: parts[0], remote: isRemote };
+      return { city: parts[0], remote: isRemote };
     }
 
-    return { remote: isRemote };
+    const [first, second, ...rest] = parts;
+    const state = stateCode(second);
+    if (state) {
+      return {
+        city: first,
+        state,
+        country: rest[0] || 'United States',
+        remote: isRemote
+      };
+    }
+    // "City, Country" or "City, Region, Country"
+    return {
+      city: first,
+      state: rest.length > 0 ? second : undefined,
+      country: rest.length > 0 ? rest[rest.length - 1] : second,
+      remote: isRemote
+    };
   }
 
   /**

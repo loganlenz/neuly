@@ -145,46 +145,71 @@ describe('FundingCrawler', () => {
 });
 
 describe('PreprintCrawler', () => {
-  const biorxivFixture = {
-    messages: [{ status: 'ok', count: 2, total: 2, cursor: 0 }],
-    collection: [
-      {
-        doi: '10.1101/2026.06.01.657001',
-        title: 'Psilocybin alters cortical dynamics in treatment-resistant depression',
-        authors: 'Doe, J.; Smith, A.',
-        date: '2026-06-20',
-        category: 'neuroscience',
-        abstract: 'We show psilocybin modulates...',
-        server: 'biorxiv'
-      },
-      {
-        doi: '10.1101/2026.06.02.657002',
-        title: 'A CRISPR screen in yeast',
-        authors: 'Roe, R.',
-        date: '2026-06-21',
-        category: 'genetics',
-        abstract: 'Nothing psychedelic here.',
-        server: 'biorxiv'
-      }
-    ]
+  const europePmcFixture = {
+    hitCount: 2,
+    nextCursorMark: 'AoIIP4AAACgzNzY5MjA=',
+    resultList: {
+      result: [
+        {
+          id: 'PPR1307002',
+          source: 'PPR',
+          doi: '10.1101/2026.06.01.657001',
+          title: 'Psilocybin alters cortical dynamics in treatment-resistant depression',
+          authorString: 'Doe J, Smith A.',
+          authorList: { author: [{ fullName: 'Doe J', firstName: 'Jane', lastName: 'Doe', affiliation: 'Imperial College London' }, { fullName: 'Smith A' }] },
+          firstPublicationDate: '2026-06-20',
+          pubYear: '2026',
+          abstractText: 'We show psilocybin modulates...',
+          bookOrReportDetails: { publisher: 'bioRxiv' },
+          citedByCount: 3
+        },
+        {
+          id: 'PPR1307003',
+          source: 'PPR',
+          doi: '10.1101/2026.06.02.657002',
+          title: 'A CRISPR screen in yeast',
+          authorString: 'Roe R.',
+          firstPublicationDate: '2026-06-21',
+          abstractText: 'Nothing psychedelic here.',
+          bookOrReportDetails: { publisher: 'bioRxiv' }
+        }
+      ]
+    }
   };
 
   it('keeps only substance-relevant preprints and maps them to ResearchPaper', async () => {
     const crawler = new PreprintCrawler();
-    stubRequest(crawler, async () => biorxivFixture);
+    const queries: string[] = [];
+    stubRequest(crawler, async (_url, opts) => {
+      queries.push(String((opts as { params?: { query?: string } })?.params?.query));
+      return europePmcFixture;
+    });
 
-    const result = await crawler.crawl();
+    const result = await crawler.crawl('psilocybin');
     expect(result.success).toBe(true);
-    // fixture served for both biorxiv and medrxiv; each keeps 1 of 2
-    expect(result.data!.length).toBe(2);
+    expect(queries[0]).toBe('(psilocybin) AND (SRC:PPR)');
+    // fewer than a full page -> no second request
+    expect(queries).toHaveLength(1);
+    expect(result.data!.length).toBe(1);
 
     const paper = result.data![0];
+    expect(paper.id).toBe('pp_10-1101-2026-06-01-657001');
     expect(paper.title).toContain('Psilocybin');
     expect(paper.publicationType).toEqual(['Preprint']);
+    expect(paper.journal).toBe('bioRxiv');
     expect(paper.isOpenAccess).toBe(true);
-    expect(paper.authors.map(a => a.name)).toEqual(['Doe, J.', 'Smith, A.']);
+    expect(paper.authors.map(a => a.name)).toEqual(['Doe J', 'Smith A']);
+    expect(paper.authors[0].affiliation).toBe('Imperial College London');
     expect(paper.year).toBe(2026);
+    expect(paper.citationCount).toBe(3);
     expect(paper.url).toBe('https://doi.org/10.1101/2026.06.01.657001');
+  });
+
+  it('deduplicates the same preprint found by several terms', async () => {
+    const crawler = new PreprintCrawler();
+    stubRequest(crawler, async () => europePmcFixture);
+    const result = await crawler.crawl();
+    expect(result.data!.length).toBe(1);
   });
 });
 

@@ -9,6 +9,7 @@ import {
   INDICATIONS
 } from '../models/types.js';
 import { logger } from '../utils/logger.js';
+import { detectSubstances as detectTrackedSubstances } from '../utils/substances.js';
 
 interface PubMedSearchResult {
   esearchresult?: {
@@ -405,10 +406,12 @@ export class PubMedCrawler extends BaseCrawler<ResearchPaper> {
     articleData: PubMedCitationArticle
   ): string | undefined {
     // Try ArticleDate first (electronic publication)
+    // fast-xml-parser coerces numeric text nodes (<Day>7</Day>) to numbers,
+    // so every field is normalised to a string before any string method.
     const artDate = articleData?.ArticleDate;
     if (artDate?.Year) {
-      const month = artDate.Month?.padStart(2, '0') || '01';
-      const day = artDate.Day?.padStart(2, '0') || '01';
+      const month = this.monthToNumber(artDate.Month);
+      const day = this.dayToNumber(artDate.Day);
       return `${artDate.Year}-${month}-${day}`;
     }
 
@@ -416,13 +419,13 @@ export class PubMedCrawler extends BaseCrawler<ResearchPaper> {
     const pubDate = articleData?.Journal?.JournalIssue?.PubDate;
     if (pubDate) {
       if (pubDate.Year) {
-        const month = pubDate.Month ? this.monthToNumber(pubDate.Month) : '01';
-        const day = pubDate.Day?.padStart(2, '0') || '01';
+        const month = this.monthToNumber(pubDate.Month);
+        const day = this.dayToNumber(pubDate.Day);
         return `${pubDate.Year}-${month}-${day}`;
       }
       if (pubDate.MedlineDate) {
         // Format: "2023 Jan-Feb" or "2023"
-        const match = pubDate.MedlineDate.match(/(\d{4})/);
+        const match = String(pubDate.MedlineDate).match(/(\d{4})/);
         if (match) {
           return `${match[1]}-01-01`;
         }
@@ -435,13 +438,25 @@ export class PubMedCrawler extends BaseCrawler<ResearchPaper> {
   /**
    * Convert month name to number
    */
-  private monthToNumber(month: string): string {
+  private monthToNumber(month: string | number | undefined | null): string {
+    if (month === undefined || month === null || month === '') return '01';
+    const text = String(month).trim();
+    if (/^\d{1,2}$/.test(text)) {
+      const n = parseInt(text, 10);
+      return n >= 1 && n <= 12 ? String(n).padStart(2, '0') : '01';
+    }
     const months: Record<string, string> = {
       jan: '01', feb: '02', mar: '03', apr: '04',
       may: '05', jun: '06', jul: '07', aug: '08',
       sep: '09', oct: '10', nov: '11', dec: '12'
     };
-    return months[month.toLowerCase().slice(0, 3)] || '01';
+    return months[text.toLowerCase().slice(0, 3)] || '01';
+  }
+
+  private dayToNumber(day: string | number | undefined | null): string {
+    if (day === undefined || day === null || day === '') return '01';
+    const n = parseInt(String(day), 10);
+    return Number.isFinite(n) && n >= 1 && n <= 31 ? String(n).padStart(2, '0') : '01';
   }
 
   /**
@@ -499,38 +514,9 @@ export class PubMedCrawler extends BaseCrawler<ResearchPaper> {
     return terms;
   }
 
-  /**
-   * Detect psychedelic substances from text
-   */
+  /** Detect tracked substances from text (shared taxonomy) */
   private detectSubstances(texts: string[]): Substance[] {
-    const found = new Set<Substance>();
-    const combinedText = texts.join(' ').toLowerCase();
-
-    const substancePatterns: Record<Substance, RegExp[]> = {
-      'Psilocybin': [/psilocybin/i, /psilocin/i, /magic mushroom/i, /psilocybe/i],
-      'MDMA': [/\bmdma\b/i, /3,4-methylenedioxy/i, /ecstasy/i],
-      'Ketamine': [/ketamine/i, /esketamine/i, /arketamine/i],
-      'LSD': [/\blsd\b/i, /lysergic/i, /d-lysergic/i],
-      'DMT': [/\bdmt\b/i, /dimethyltryptamine/i],
-      '5-MeO-DMT': [/5-meo-dmt/i, /5-methoxydimethyltryptamine/i],
-      'Ibogaine': [/ibogaine/i, /iboga/i, /noribogaine/i],
-      'Ayahuasca': [/ayahuasca/i, /harmine/i, /banisteriopsis/i],
-      'Cannabis': [/cannabis/i, /cannabidiol/i, /\bcbd\b/i, /\bthc\b/i],
-      'Mescaline': [/mescaline/i, /peyote/i],
-      'Other': []
-    };
-
-    for (const [substance, patterns] of Object.entries(substancePatterns)) {
-      if (substance === 'Other') continue;
-      for (const pattern of patterns) {
-        if (pattern.test(combinedText)) {
-          found.add(substance as Substance);
-          break;
-        }
-      }
-    }
-
-    return Array.from(found);
+    return detectTrackedSubstances(texts.join(' '));
   }
 
   /**
@@ -604,7 +590,21 @@ export class PubMedCrawler extends BaseCrawler<ResearchPaper> {
       'psychedelic default mode network',
       'psychoplastogen antidepressant',
       'psychedelic integration therapy',
-      'psychedelic safety adverse events'
+      'psychedelic safety adverse events',
+      // Plant and fungal medicines beyond the classic psychedelics
+      'kratom mitragynine clinical',
+      'kratom opioid withdrawal',
+      'kava anxiety randomized',
+      'kavalactone pharmacology',
+      'salvinorin A kappa opioid',
+      'Salvia divinorum',
+      'Sceletium tortuosum kanna',
+      'Amanita muscaria',
+      'cannabidiol anxiety randomized',
+      'cannabis PTSD clinical trial',
+      'cannabinoid chronic pain randomized',
+      'mescaline psychotherapy',
+      'peyote San Pedro ceremonial'
     ];
   }
 }

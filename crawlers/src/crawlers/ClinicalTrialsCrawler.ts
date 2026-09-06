@@ -12,6 +12,7 @@ import {
   ClinicalPhase
 } from '../models/types.js';
 import { logger } from '../utils/logger.js';
+import { detectSubstances as detectTrackedSubstances } from '../utils/substances.js';
 
 interface CTGovStudy {
   protocolSection?: {
@@ -68,10 +69,16 @@ interface CTGovStudy {
         email?: string;
         phone?: string;
       }>;
+      overallOfficials?: Array<{
+        name?: string;
+        affiliation?: string;
+        role?: string;
+      }>;
     };
     sponsorCollaboratorsModule?: {
       leadSponsor?: {
         name?: string;
+        class?: string;
       };
       collaborators?: Array<{
         name?: string;
@@ -125,7 +132,7 @@ export class ClinicalTrialsCrawler extends BaseCrawler<ClinicalTrial> {
 
       do {
         const params: Record<string, string> = {
-          'query.term': query || 'psilocybin OR MDMA OR ketamine OR LSD OR ibogaine OR ayahuasca OR psychedelic',
+          'query.term': query || 'psilocybin OR MDMA OR ketamine OR LSD OR ibogaine OR ayahuasca OR psychedelic OR kratom OR kava OR salvinorin OR sceletium OR "amanita muscaria"',
           'filter.overallStatus': 'RECRUITING,ACTIVE_NOT_RECRUITING,ENROLLING_BY_INVITATION,NOT_YET_RECRUITING,COMPLETED',
           'pageSize': '100',
           'fields': [
@@ -155,7 +162,11 @@ export class ClinicalTrialsCrawler extends BaseCrawler<ClinicalTrial> {
             'CentralContactEMail',
             'CentralContactPhone',
             'LeadSponsorName',
-            'CollaboratorName'
+            'LeadSponsorClass',
+            'CollaboratorName',
+            'OverallOfficialName',
+            'OverallOfficialAffiliation',
+            'OverallOfficialRole'
           ].join(',')
         };
 
@@ -221,6 +232,13 @@ export class ClinicalTrialsCrawler extends BaseCrawler<ClinicalTrial> {
     const interventions = protocol.armsInterventionsModule?.interventions || [];
     const locations = protocol.contactsLocationsModule?.locations || [];
     const contacts = protocol.contactsLocationsModule?.centralContacts || [];
+    const officials = (protocol.contactsLocationsModule?.overallOfficials || [])
+      .filter(o => o.name)
+      .map(o => ({
+        name: cleanText(o.name) || o.name || '',
+        affiliation: cleanText(o.affiliation),
+        role: o.role ? o.role.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, ch => ch.toUpperCase()) : undefined
+      }));
 
     // Detect substances from interventions and conditions
     const substances = this.detectSubstances([
@@ -253,6 +271,8 @@ export class ClinicalTrialsCrawler extends BaseCrawler<ClinicalTrial> {
       })),
       substances,
       sponsor: protocol.sponsorCollaboratorsModule?.leadSponsor?.name,
+      sponsorClass: protocol.sponsorCollaboratorsModule?.leadSponsor?.class,
+      officials: officials.length > 0 ? officials : undefined,
       collaborators: protocol.sponsorCollaboratorsModule?.collaborators?.map(c => c.name || '').filter(Boolean),
       enrollment: protocol.designModule?.enrollmentInfo?.count,
       startDate: parseDate(protocol.statusModule?.startDateStruct?.date),
@@ -291,44 +311,16 @@ export class ClinicalTrialsCrawler extends BaseCrawler<ClinicalTrial> {
   }
 
   /**
-   * Detect psychedelic substances from text
+   * Detect tracked substances from text (shared taxonomy). Trials that are
+   * clearly psychedelic but name no tracked substance are tagged 'Other'.
    */
   private detectSubstances(texts: string[]): Substance[] {
-    const found = new Set<Substance>();
-    const combinedText = texts.join(' ').toLowerCase();
-
-    const substancePatterns: Record<Substance, RegExp[]> = {
-      'Psilocybin': [/psilocybin/i, /psilocin/i, /magic mushroom/i],
-      'MDMA': [/mdma/i, /3,4-methylenedioxy/i, /methylenedioxymethamphetamine/i],
-      'Ketamine': [/ketamine/i, /esketamine/i, /arketamine/i, /spravato/i],
-      'LSD': [/\blsd\b/i, /lysergic acid/i],
-      'DMT': [/\bdmt\b/i, /dimethyltryptamine/i, /n,n-dmt/i],
-      '5-MeO-DMT': [/5-meo-dmt/i, /5-methoxy/i],
-      'Ibogaine': [/ibogaine/i, /iboga/i, /noribogaine/i],
-      'Ayahuasca': [/ayahuasca/i, /harmine/i, /banisteriopsis/i],
-      'Cannabis': [/cannabis/i, /marijuana/i, /\bcbd\b/i, /\bthc\b/i, /cannabidiol/i],
-      'Mescaline': [/mescaline/i, /peyote/i],
-      'Other': []
-    };
-
-    for (const [substance, patterns] of Object.entries(substancePatterns)) {
-      if (substance === 'Other') continue;
-      for (const pattern of patterns) {
-        if (pattern.test(combinedText)) {
-          found.add(substance as Substance);
-          break;
-        }
-      }
+    const combinedText = texts.join(' ');
+    const found = detectTrackedSubstances(combinedText);
+    if (found.length === 0 && /psychedelic|hallucinogen|entheogen|psychoplastogen/i.test(combinedText)) {
+      return ['Other'];
     }
-
-    // If no specific substance found but it's clearly psychedelic-related
-    if (found.size === 0) {
-      if (/psychedelic|hallucinogen|entheogen/i.test(combinedText)) {
-        found.add('Other');
-      }
-    }
-
-    return Array.from(found);
+    return found;
   }
 
   /**
@@ -423,7 +415,20 @@ export class ClinicalTrialsCrawler extends BaseCrawler<ClinicalTrial> {
       'psychedelic obsessive compulsive disorder',
       'psychedelic anorexia nervosa',
       'psychedelic chronic pain',
-      'psychedelic fibromyalgia'
+      'psychedelic fibromyalgia',
+      // Plant and fungal medicines beyond the classic psychedelics
+      'kratom',
+      'mitragynine',
+      'kava anxiety',
+      'kavalactone',
+      'salvinorin',
+      'Salvia divinorum',
+      'Sceletium tortuosum',
+      'kanna',
+      'Amanita muscaria',
+      'cannabidiol anxiety',
+      'cannabis PTSD',
+      'cannabis chronic pain'
     ];
   }
 }

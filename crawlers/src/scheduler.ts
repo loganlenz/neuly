@@ -31,6 +31,7 @@ const DEFAULT_SCHEDULE: ScheduleEntry[] = [
   { crawler: 'funding', cron: '30 9 * * 1-5', description: 'SEC Form D filings — weekdays 09:30 UTC' },
   { crawler: 'preprints', cron: '0 10 * * *', description: 'bioRxiv/medRxiv preprints — daily 10:00 UTC' },
   { crawler: 'grants', cron: '0 4 * * 3', description: 'NIH RePORTER grants — Wednesdays 04:00 UTC' },
+  { crawler: 'care', cron: '0 11 * * 1', description: 'Licensed care providers — Mondays 11:00 UTC' },
   // Refresh citation counts on stored papers twice a week (Wed & Sat).
   { crawler: 'openalex', cron: '0 3 * * 3,6', description: 'OpenAlex citation refresh — Wednesdays & Saturdays 03:00 UTC' }
 ];
@@ -95,9 +96,15 @@ async function main(): Promise<void> {
   logger.info(`  ${'newsletter'.padEnd(16)} ${newsletterCron.padEnd(14)} Weekly digest — Mondays 13:00 UTC`);
 
   if (process.env.RUN_ON_START === 'true') {
+    // Order matters on a cold start: companies derive from trials, funding
+    // and jobs derive from companies, people derive from trials/grants/papers.
+    const bootOrder: Array<Exclude<CrawlerName, 'all'>> = [
+      'clinicaltrials', 'pubmed', 'preprints', 'grants', 'companies', 'funding', 'jobs', 'people',
+      'events', 'legislation', 'care', 'openalex'
+    ];
     logger.info('[Scheduler] RUN_ON_START=true — running all crawlers now');
-    for (const entry of DEFAULT_SCHEDULE) {
-      enqueue(entry.crawler);
+    for (const crawler of bootOrder) {
+      enqueue(crawler);
     }
   }
 
