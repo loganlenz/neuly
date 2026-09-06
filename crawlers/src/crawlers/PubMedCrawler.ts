@@ -56,7 +56,7 @@ interface PubMedArticle {
       };
       ELocationID?: Array<{ '#text'?: string; '@_EIdType'?: string }> | { '#text'?: string; '@_EIdType'?: string };
       PublicationTypeList?: {
-        PublicationType?: string[] | string;
+        PublicationType?: Array<string | { '#text'?: string }> | string | { '#text'?: string };
       };
       ArticleDate?: {
         Year?: string;
@@ -124,6 +124,9 @@ export class PubMedCrawler extends BaseCrawler<ResearchPaper> {
 
     this.apiKey = apiKey || process.env.NCBI_API_KEY;
     this.xmlParser = new XMLParser({
+      // Keep every text node a string: <Day>7</Day>, <PMID>…</PMID>, <Volume>12</Volume>
+      // would otherwise be coerced to numbers and break string handling downstream.
+      parseTagValue: false,
       ignoreAttributes: false,
       attributeNamePrefix: '@_',
       textNodeName: '#text',
@@ -290,8 +293,14 @@ export class PubMedCrawler extends BaseCrawler<ResearchPaper> {
     ]);
 
     // Extract publication types
+    // <PublicationType UI="D016428">Journal Article</PublicationType> parses to
+    // { '#text', '@_UI' } because attributes are kept; reduce to the label.
     const pubTypes = articleData.PublicationTypeList?.PublicationType;
-    const publicationType = Array.isArray(pubTypes) ? pubTypes : pubTypes ? [pubTypes] : undefined;
+    const pubTypeList = Array.isArray(pubTypes) ? pubTypes : pubTypes ? [pubTypes] : [];
+    const publicationType = pubTypeList
+      .map(t => (typeof t === 'string' ? t : t?.['#text'] ?? ''))
+      .map(t => String(t).trim())
+      .filter(Boolean);
 
     return {
       id: this.generateId('pm', pmid),
@@ -310,7 +319,7 @@ export class PubMedCrawler extends BaseCrawler<ResearchPaper> {
       meshTerms,
       substances,
       indications,
-      publicationType,
+      publicationType: publicationType.length > 0 ? publicationType : undefined,
       url: `https://pubmed.ncbi.nlm.nih.gov/${pmid}/`,
       isOpenAccess: undefined, // Would need separate API call to determine
       crawledAt: this.getTimestamp()

@@ -112,6 +112,9 @@ export class ClinicalTrialsCrawler extends BaseCrawler<ClinicalTrial> {
     });
 
     this.xmlParser = new XMLParser({
+      // Keep every text node a string: <Day>7</Day>, <PMID>…</PMID>, <Volume>12</Volume>
+      // would otherwise be coerced to numbers and break string handling downstream.
+      parseTagValue: false,
       ignoreAttributes: false,
       attributeNamePrefix: '@_'
     });
