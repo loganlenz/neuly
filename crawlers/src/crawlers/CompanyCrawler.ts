@@ -87,6 +87,12 @@ const HEALTH_SIC = new Set([
   '8731', '8732', '8734'
 ]);
 
+/** Drug developers: strong enough on their own for a single-term match */
+const DRUG_DEVELOPER_SIC = new Set(['2833', '2834', '2835', '2836', '8731']);
+
+/** Devices, instruments and drug-test makers: substances appear only as test targets */
+const DEVICE_SIC = new Set(['3826', '3841', '3842', '3843', '3844', '3845', '3851', '5047', '8071']);
+
 /** Filer names that are vehicles, not operating companies */
 const VEHICLE_NAME = /acquisition\s+corp|\bspac\b|\btrust\b|\betf\b|\bfunds?\b|series solutions|\bspv\b|master partnership|\bl\.?p\.?$|capital corp|holdings? ii\b|opportunit(y|ies) fund|\bventures? (fund|i{1,3})\b/i;
 
@@ -177,8 +183,15 @@ export class CompanyCrawler extends BaseCrawler<Company> {
   /** How far back EDGAR full-text discovery looks */
   private static readonly DISCOVERY_YEARS = 3;
 
-  /** Minimum filings mentioning a term before a filer is considered */
-  private static readonly DISCOVERY_MIN_DOCS = 3;
+  /** Filers naming 2+ tracked terms need this many matching filings */
+  private static readonly DISCOVERY_MIN_DOCS = 5;
+  /**
+   * A single term (e.g. only "esketamine", only "kava") is weak evidence —
+   * competitors, drug-test makers and supplement sellers mention them in
+   * passing — so it must recur across many filings and come from a drug
+   * developer, not a device or supplement company.
+   */
+  private static readonly DISCOVERY_SINGLE_TERM_MIN_DOCS = 20;
 
   /** Cap on submissions lookups per run (rate-limit hygiene) */
   private static readonly DISCOVERY_MAX_LOOKUPS = 80;
@@ -236,8 +249,16 @@ export class CompanyCrawler extends BaseCrawler<Company> {
       logger.info(`[SEC EDGAR] ${sponsorCandidates.length} industry sponsors from ClinicalTrials.gov`);
     }
 
-    // 3. SEC filers whose filings mention tracked substances
+    // 3. SEC filers whose filings mention tracked substances. Curated and
+    //    sponsor candidates get their CIKs resolved first so a filer that has
+    //    since renamed (MindMed → Definium, atai → AtaiBeckley) is recognised
+    //    as the same company rather than added twice.
     if (!this.options.skipDiscovery) {
+      for (const candidate of candidates.values()) {
+        if (!candidate.cik && (candidate.ticker || candidate.stage === 'Public')) {
+          candidate.cik = await this.resolveCik(candidate).catch(() => undefined);
+        }
+      }
       try {
         const discovered = await this.discoverFromEdgar(candidates);
         for (const candidate of discovered) {
@@ -293,7 +314,8 @@ export class CompanyCrawler extends BaseCrawler<Company> {
     const candidates: Candidate[] = [];
     for (const { name, trials: sponsored } of bySponsor.values()) {
       const substances = Array.from(new Set(sponsored.flatMap(t => t.substances))) as Substance[];
-      if (substances.length === 0) continue;
+      if (substances.filter(s => s !== 'Other').length === 0) continue;
+      if (name.length < 4) continue;
       const conditions = new Map<string, number>();
       for (const t of sponsored) for (const c of t.conditions) conditions.set(c, (conditions.get(c) ?? 0) + 1);
       const focus = Array.from(conditions.entries()).sort((a, b) => b[1] - a[1])[0]?.[0];
@@ -344,7 +366,9 @@ export class CompanyCrawler extends BaseCrawler<Company> {
     for (const c of existing.values()) if (c.cik) knownCiks.add(c.cik);
 
     const ranked = Array.from(hits.values())
-      .filter(h => h.docs >= CompanyCrawler.DISCOVERY_MIN_DOCS)
+      .filter(h => h.terms.size >= 2
+        ? h.docs >= CompanyCrawler.DISCOVERY_MIN_DOCS
+        : h.docs >= CompanyCrawler.DISCOVERY_SINGLE_TERM_MIN_DOCS)
       .filter(h => !VEHICLE_NAME.test(h.name))
       .filter(h => !knownCiks.has(h.cik) && !existing.has(normalizeCompanyName(h.name)))
       .sort((a, b) => b.docs - a.docs)
@@ -360,6 +384,10 @@ export class CompanyCrawler extends BaseCrawler<Company> {
         continue;
       }
       if (!isHealthFiler(submissions)) continue;
+      // Single-term matches must come from a drug developer
+      if (hit.terms.size < 2 && !DRUG_DEVELOPER_SIC.has(submissions.sic || '')) continue;
+      // Device and instrument makers mention substances only as test targets
+      if (DEVICE_SIC.has(submissions.sic || '')) continue;
 
       const terms = Array.from(hit.terms);
       const substances = detectSubstances(terms.join(' '));
@@ -600,7 +628,7 @@ function typeFromSic(sic?: string): Company['type'] {
 
 /** "CYBIN INC." → "Cybin Inc." ; keeps mixed-case names as filed */
 function cleanDisplayName(name: string): string {
-  const trimmed = name.replace(/\s+/g, ' ').trim();
+  const trimmed = name.replace(/\\.*$/, '').replace(/\s+/g, ' ').trim();
   if (trimmed !== trimmed.toUpperCase()) return trimmed;
   return titleCase(trimmed).replace(/\b(Inc|Ltd|Plc|Llc|Corp)\b/g, m => m === 'Plc' ? 'plc' : m === 'Llc' ? 'LLC' : m);
 }

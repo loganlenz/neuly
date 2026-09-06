@@ -13,6 +13,8 @@
 import 'dotenv/config';
 import { createStorage } from '../utils/storageBackend.js';
 import { DataType } from '../utils/storage.js';
+import { isRelevantFederalDocument } from '../crawlers/LegislationCrawler.js';
+import type { LegislationBill } from '../models/types.js';
 import { logger } from '../utils/logger.js';
 
 export const LEGACY_SEED_IDS: Partial<Record<DataType, string[]>> = {
@@ -53,6 +55,18 @@ async function main(): Promise<void> {
     removed += toDelete.length;
     logger.info(`[cleanup] ${type}: removed ${toDelete.length} legacy seed rows`);
   }
+  // Federal Register rows saved before the relevance filter existed: bulk
+  // importer/manufacturer registration notices that merely list a substance.
+  const bills = await storage.load<LegislationBill>('legislation');
+  const noise = bills
+    .filter(b => b.source === 'Federal Register' && !isRelevantFederalDocument(`${b.title} ${b.description || ''}`))
+    .map(b => b.id);
+  if (noise.length > 0) {
+    await storage.delete('legislation', noise);
+    removed += noise.length;
+    logger.info(`[cleanup] legislation: removed ${noise.length} off-topic Federal Register notices`);
+  }
+
   logger.info(`[cleanup] done — ${removed} legacy rows removed (storage: ${storage.label})`);
   await storage.close();
 }

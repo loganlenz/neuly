@@ -132,7 +132,7 @@ export class ClinicalTrialsCrawler extends BaseCrawler<ClinicalTrial> {
 
       do {
         const params: Record<string, string> = {
-          'query.term': query || 'psilocybin OR MDMA OR ketamine OR LSD OR ibogaine OR ayahuasca OR psychedelic OR kratom OR kava OR salvinorin OR sceletium OR muscimol',
+          'query.term': query || 'psilocybin OR MDMA OR ketamine OR LSD OR ibogaine OR ayahuasca OR psychedelic OR kratom OR kava OR salvinorin OR sceletium OR "amanita muscaria"',
           'filter.overallStatus': 'RECRUITING,ACTIVE_NOT_RECRUITING,ENROLLING_BY_INVITATION,NOT_YET_RECRUITING,COMPLETED',
           'pageSize': '100',
           'fields': [
@@ -425,7 +425,6 @@ export class ClinicalTrialsCrawler extends BaseCrawler<ClinicalTrial> {
       'Salvia divinorum',
       'Sceletium tortuosum',
       'kanna',
-      'muscimol',
       'Amanita muscaria',
       'cannabidiol anxiety',
       'cannabis PTSD',

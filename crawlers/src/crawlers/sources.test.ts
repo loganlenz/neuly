@@ -109,6 +109,13 @@ describe('PeopleCrawler derivation', () => {
   it('strips credentials and derives investigators, PIs and prolific authors with evidence', async () => {
     expect(normalizePersonName('Joshua Siegel, MD, PhD')).toBe('Joshua Siegel');
     expect(normalizePersonName('Pouya Movahed Rad, Associate Professor')).toBe('Pouya Movahed Rad');
+    expect(normalizePersonName('Linda E. Carlson , R.Psych, FCAHS, FABMR')).toBe('Linda E. Carlson');
+    expect(normalizePersonName('Dr. Robin Carhart-Harris')).toBe('Robin Carhart-Harris');
+    expect(normalizePersonName('Doe, Jane')).toBe('Jane Doe');
+    expect(normalizePersonName('Call 1-877-CTLILLY or 1-317-615-4559 Mon - Fri 8 AM - 8 PM Eastern time')).toBe('');
+    expect(normalizePersonName('Janssen Pharmaceutical K.K., Japan Clinical Trial')).toBe('');
+    expect(normalizePersonName('Francisney P Nascimento, 1')).toBe('Francisney P Nascimento');
+    expect(normalizePersonName('Ahmed S Abd El Azeem, Residant')).toBe('Ahmed S Abd El Azeem');
 
     const trial: ClinicalTrial = {
       id: 'ct_x', nctId: 'NCT00000009', title: 't', status: 'Recruiting', conditions: ['PTSD'], interventions: [],

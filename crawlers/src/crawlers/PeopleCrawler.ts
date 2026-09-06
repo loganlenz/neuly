@@ -27,17 +27,45 @@ export interface PeopleCrawlerOptions {
 /** Degrees and honorifics trailing a name on ClinicalTrials.gov ("Jane Doe, MD, PhD") */
 const CREDENTIALS = /\s*,?\s*\b(m\.?d\.?|ph\.?d\.?|d\.?o\.?|psy\.?d\.?|m\.?p\.?h\.?|m\.?s\.?c?\.?|m\.?a\.?|r\.?n\.?|b\.?sc?\.?|pharm\.?d\.?|f\.?r\.?c\.?p\.?c?\.?|m\.?b\.?b\.?s\.?|dr\.?|prof\.?|professor|associate professor|assistant professor|md-phd|np|pa-c|lcsw|lmft|mph|msc|mba|ms|ma|rn|bsn|dnp|frcpc|frcp|facs|faan)\b\.?/gi;
 
-/** Normalise a person's name for cross-source matching */
-export function normalizePersonName(name: string): string {
-  return cleanText(name.replace(CREDENTIALS, ' ').replace(/\(.*?\)/g, ' '))
-    ?.replace(/\s+/g, ' ')
-    .trim() || '';
-}
+/** Strings that are organisations, hotlines or roles rather than people */
+const NOT_A_PERSON = /\b(call|trial|trials|pharmaceutical|pharma|department|dept|clinical|office|contact|team|group|study|site|coordinator|hospital|university|institute|center|centre|clinic|inc|llc|ltd|k\.k\.|foundation|research|services|laborator|assist|resident|residant|student|nurse|investigator|physician|professor|program|committee|unit|division|company|corporation|hotline|information)\b/i;
 
 /**
- * Crawler for researcher and key people data in the psychedelic medicine field
- * Combines known key figures with PubMed author data
+ * Normalise a person's name for cross-source matching.
+ * ClinicalTrials.gov officials arrive as "Jane Q Doe, MD, PhD" — everything
+ * after the first comma is credentials unless the name is "Last, First".
+ * Returns '' when the string is not a plausible person name.
  */
+export function normalizePersonName(name: string): string {
+  let text = cleanText(name) || '';
+  text = text.replace(/\(.*?\)/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+
+  const commaParts = text.split(',').map(p => p.trim()).filter(Boolean);
+  if (commaParts.length > 1) {
+    const [head, second] = commaParts;
+    // "Doe, Jane" → "Jane Doe"; otherwise drop the credential tail
+    text = head.split(' ').length === 1 && /^[A-Z][a-z]+(\s[A-Z]\.?)?$/.test(second) && !CREDENTIALS.test(second)
+      ? `${second} ${head}`
+      : head;
+  }
+
+  text = text
+    .replace(/^(dr|prof|professor|mr|mrs|ms|mx)\.?\s+/i, '')
+    .replace(CREDENTIALS, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/[,;:\-\s]+$/, '');
+
+  if (!text || /\d/.test(text)) return '';
+  const words = text.split(' ');
+  if (words.length < 2 || words.length > 5) return '';
+  if (NOT_A_PERSON.test(text)) return '';
+  // Every word should look like a name part (letters, hyphens, apostrophes, initials)
+  if (!words.every(w => /^[\p{L}][\p{L}'’\-.]*$/u.test(w))) return '';
+  return text;
+}
+
 export class PeopleCrawler extends BaseCrawler<Person> {
   // Known key figures in psychedelic medicine
   private static readonly KEY_FIGURES: Partial<Person>[] = [
@@ -639,8 +667,7 @@ export class PeopleCrawler extends BaseCrawler<Person> {
 
     const upsert = (rawName: string, patch: Partial<Person>, evidence: string, source: string, substances: Substance[]) => {
       const name = normalizePersonName(rawName);
-      if (!name || name.split(' ').length < 2 || name.length > 80) return;
-      if (/\b(university|hospital|clinic|institute|center|centre|department|inc|llc|ltd|foundation|group|trust|study|team)\b/i.test(name)) return;
+      if (!name || name.length > 80) return;
       const key = name.toLowerCase();
       const current = byName.get(key) ?? {
         id: this.generateId('per', this.slugify(name)),
@@ -686,7 +713,8 @@ export class PeopleCrawler extends BaseCrawler<Person> {
     for (const paper of this.options.papers ?? []) {
       for (const author of paper.authors) {
         const name = normalizePersonName(author.name);
-        if (!name || name.split(' ').length < 2 || /^et al/i.test(name) || /[A-Z]{2,}\s*$/.test(name) && name.length < 8) continue;
+        // PubMed stores "Doe JQ" — an initials-only surname form is not a display name
+        if (!name || /^et al/i.test(name) || /\b[A-Z]{1,3}$/.test(name)) continue;
         const key = name.toLowerCase();
         const entry = authorCounts.get(key) ?? { name, count: 0, affiliation: undefined, substances: new Set<Substance>(), areas: new Map() };
         entry.count++;

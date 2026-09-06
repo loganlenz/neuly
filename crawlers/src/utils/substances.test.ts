@@ -32,4 +32,17 @@ describe('detectSubstances', () => {
     expect(detectSubstances(undefined)).toEqual([]);
     expect(detectSubstances(null)).toEqual([]);
   });
+
+  it('ignores LSD/DMT acronyms outside a psychedelic context', () => {
+    expect(detectSubstances('First outbreak of Lumpy Skin disease (LSD) in Catalonia')).toEqual([]);
+    expect(detectSubstances('Disease-modifying therapies (DMT) in multiple sclerosis')).toEqual([]);
+    expect(detectSubstances('Salivary oxytocin as a biomarker of LSD response in depression: a psychedelic trial')).toEqual(['LSD']);
+    expect(detectSubstances('Inhaled N,N-dimethyltryptamine pharmacokinetics')).toEqual(['DMT']);
+    expect(detectSubstances('LSD microdosing in mice')).toEqual(['LSD']);
+  });
+
+  it('requires the mushroom, not the reagent, for Amanita muscaria', () => {
+    expect(detectSubstances('Muscimol inactivation of the nucleus reuniens')).toEqual([]);
+    expect(detectSubstances('Ibotenic acid biosynthesis in the fly agaric')).toEqual(['Amanita Muscaria']);
+  });
 });

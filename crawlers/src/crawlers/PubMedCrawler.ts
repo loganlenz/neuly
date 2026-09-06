@@ -599,7 +599,7 @@ export class PubMedCrawler extends BaseCrawler<ResearchPaper> {
       'salvinorin A kappa opioid',
       'Salvia divinorum',
       'Sceletium tortuosum kanna',
-      'muscimol Amanita muscaria',
+      'Amanita muscaria',
       'cannabidiol anxiety randomized',
       'cannabis PTSD clinical trial',
       'cannabinoid chronic pain randomized',
