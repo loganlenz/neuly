@@ -24,8 +24,11 @@ class StubCrawler extends BaseCrawler<StubEntity> {
   async crawl(query: string): Promise<CrawlResult<StubEntity>> {
     const ids = this.resultsByQuery[query] ?? [];
     const data = ids.map(id => ({ id, crawledAt: new Date().toISOString() }) as StubEntity);
+    // Queries ending in "!" simulate a partial failure (one bad record)
+    const partial = query.endsWith('!');
     return {
-      success: true,
+      success: !partial,
+      errors: partial ? ['Failed to process one record'] : undefined,
       data,
       stats: { total: data.length, successful: data.length, failed: 0, duration: 0 }
     };
@@ -59,5 +62,13 @@ describe('BaseCrawler.run cross-query deduplication', () => {
 
     const result = await crawler.run(['q1', 'q2']);
     expect((result.data ?? []).length).toBe(3);
+  });
+
+  it('keeps the rows a partially failed query did return', async () => {
+    const crawler = new StubCrawler({ 'good': ['a', 'b'], 'partial!': ['c', 'd', 'e'] });
+    const result = await crawler.run(['good', 'partial!']);
+    expect(result.data!.map(d => d.id).sort()).toEqual(['a', 'b', 'c', 'd', 'e']);
+    expect(result.success).toBe(false);
+    expect(result.errors).toEqual(['Failed to process one record']);
   });
 });

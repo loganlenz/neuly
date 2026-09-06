@@ -184,13 +184,18 @@ export abstract class BaseCrawler<T extends CrawledData> {
         logger.info(`[${this.config.name}] Crawling: ${query}`);
         const result = await this.crawl(query);
 
-        if (result.success && result.data) {
+        // Keep whatever the query did return: one bad record or one failed
+        // batch must not discard the hundreds of good rows beside it.
+        if (result.data && result.data.length > 0) {
           allData.push(...result.data);
-          logger.info(`[${this.config.name}] Found ${result.data.length} items for: ${query}`);
+          logger.info(`[${this.config.name}] Found ${result.data.length} items for: ${query}${result.errors ? ` (${result.errors.length} errors)` : ''}`);
         }
 
         if (result.errors) {
           errors.push(...result.errors);
+          for (const message of result.errors.slice(0, 2)) {
+            logger.warn(`[${this.config.name}] "${query}": ${message}`);
+          }
         }
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Unknown error';
