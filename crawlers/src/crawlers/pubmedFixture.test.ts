@@ -30,6 +30,7 @@ const XML = `<?xml version="1.0" ?>
       <PublicationTypeList><PublicationType UI="D016428">Journal Article</PublicationType></PublicationTypeList>
     </Article>
     <MeshHeadingList><MeshHeading><DescriptorName UI="D011562" MajorTopicYN="Y">Psilocybin</DescriptorName></MeshHeading></MeshHeadingList>
+    <KeywordList Owner="NOTNLM"><Keyword MajorTopicYN="N">psychedelics</Keyword><Keyword MajorTopicYN="N">fMRI</Keyword></KeywordList>
   </MedlineCitation>
 </PubmedArticle>
 </PubmedArticleSet>`;
@@ -53,6 +54,8 @@ describe('PubMedCrawler efetch parsing', () => {
     expect(paper!.volume).toBe('120');
     expect(paper!.authors.map(a => a.name)).toContain('Joshua S Siegel');
     expect(paper!.substances).toEqual(['Psilocybin']);
+    expect((paper as unknown as { keywords: string[] }).keywords).toEqual(['psychedelics', 'fMRI']);
+    expect((paper as unknown as { publicationType: string[] }).publicationType).toEqual(['Journal Article']);
     expect(paper!.url).toBe('https://pubmed.ncbi.nlm.nih.gov/37234567/');
   });
 });

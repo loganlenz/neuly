@@ -71,7 +71,7 @@ interface PubMedArticle {
       }>;
     };
     KeywordList?: {
-      Keyword?: string[] | string;
+      Keyword?: Array<string | { '#text'?: string }> | string | { '#text'?: string };
     };
     ChemicalList?: {
       Chemical?: Array<{
@@ -505,8 +505,13 @@ export class PubMedCrawler extends BaseCrawler<ResearchPaper> {
     keywords: NonNullable<PubMedCitation['KeywordList']>['Keyword']
   ): string[] {
     if (!keywords) return [];
-    if (typeof keywords === 'string') return [keywords];
-    return keywords.filter(Boolean);
+    // <Keyword MajorTopicYN="N">text</Keyword> parses to { '#text', '@_MajorTopicYN' }
+    const list = Array.isArray(keywords) ? keywords : [keywords];
+    return list
+      .map(k => (typeof k === 'string' ? k : k?.['#text'] ?? ''))
+      .map(k => String(k).trim())
+      .filter(Boolean)
+      .slice(0, 30);
   }
 
   /**
