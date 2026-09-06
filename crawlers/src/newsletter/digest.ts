@@ -19,6 +19,7 @@ const SECTION_ORDER: Array<{ type: string; heading: string }> = [
   { type: 'funding_events', heading: 'Funding' },
   { type: 'companies', heading: 'Companies' },
   { type: 'grants', heading: 'Research Grants' },
+  { type: 'care_providers', heading: 'Care Providers' },
   { type: 'research_papers', heading: 'New Research' },
   { type: 'jobs', heading: 'Jobs' },
   { type: 'events', heading: 'Events' },

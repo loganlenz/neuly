@@ -41,6 +41,17 @@ interface LegiScanSearchResult {
  * Both feed the `legislation` data type — the state-by-state and federal
  * policy tracker.
  */
+/**
+ * A Federal Register document is relevant when the sector is the subject —
+ * a substance is named in the title or abstract, or the abstract discusses
+ * psychedelic / natural-medicine policy — not when a substance merely
+ * appears in a bulk controlled-substance schedule inside the body.
+ */
+export function isRelevantFederalDocument(text: string): boolean {
+  if (detectSubstances(text).length > 0) return true;
+  return /psychedelic|hallucinogen|entheogen|plant medicine|natural medicine|breakthrough therapy/i.test(text);
+}
+
 export class LegislationCrawler extends BaseCrawler<LegislationBill> {
   private legiscanApiKey?: string;
 
@@ -50,7 +61,9 @@ export class LegislationCrawler extends BaseCrawler<LegislationBill> {
     'psychedelic',
     'MDMA',
     'ibogaine',
-    'ketamine clinic'
+    'ketamine clinic',
+    'kratom',
+    'kava'
   ];
 
   constructor(legiscanApiKey?: string) {

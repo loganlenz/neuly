@@ -14,7 +14,8 @@ export type DataType =
   | 'educational_resources'
   | 'legislation'
   | 'funding_events'
-  | 'grants';
+  | 'grants'
+  | 'care_providers';
 
 export const ALL_DATA_TYPES: readonly DataType[] = [
   'clinical_trials',
@@ -26,7 +27,8 @@ export const ALL_DATA_TYPES: readonly DataType[] = [
   'educational_resources',
   'legislation',
   'funding_events',
-  'grants'
+  'grants',
+  'care_providers'
 ];
 
 interface StorageOptions {

@@ -4,16 +4,17 @@ Data collection system for the Neuly psychedelic medicine research platform. Thi
 
 ## Features
 
-- **ClinicalTrials.gov Crawler** - Fetches psychedelic clinical trials data
-- **PubMed Crawler** - Collects peer-reviewed research papers
-- **Preprint Crawler** - bioRxiv/medRxiv preprints (research 6-18 months ahead of PubMed)
-- **Company Crawler** - Gathers SEC filings and company information
-- **Legislation Crawler** - State bills (LegiScan) + federal rules and notices (Federal Register): the policy tracker
-- **Funding Crawler** - SEC Form D filings: private raises by companies in the space
+- **ClinicalTrials.gov Crawler** - Trials for every tracked substance, including lead sponsor class and the principal investigators listed on each record
+- **PubMed Crawler** - Peer-reviewed papers across ~45 substance/indication queries
+- **Preprint Crawler** - Europe PMC preprint search (bioRxiv, medRxiv, Research Square, SSRN, PsyArXiv, ...): research 6-18 months ahead of the journals
+- **Company Crawler** - Three sources into one dataset: a curated list, every SEC filer whose filings mention a tracked substance (EDGAR full-text search, filtered to pharma/biotech/healthcare SIC codes), and every industry sponsor of a tracked trial. SEC CIKs are resolved from the SEC ticker file, never hard-coded
+- **Legislation Crawler** - State bills (LegiScan) + federal rules and notices (Federal Register) that are actually about the sector: the policy tracker
+- **Funding Crawler** - SEC Form D filings for every company with a CIK, with offering amount, amount sold, investor count and named officers parsed from the filing
 - **Grants Crawler** - NIH RePORTER research grants: the leading indicator of future trials
 - **Job Crawler** - Auto-discovers ATS boards (Greenhouse, Lever, Ashby, Workable) for every company in the database and aggregates their postings
-- **Event Crawler** - Tracks conferences, webinars, and industry events
-- **People Crawler** - Profiles key researchers and industry figures
+- **Event Crawler** - Recurring conferences projected to their next edition
+- **People Crawler** - Curated key figures plus people derived from the data: trial principal investigators, NIH grant PIs and authors with 5+ papers in the corpus, each with the evidence for inclusion
+- **Care Crawler** - Care directory: state-licensed psilocybin service centers (Oregon Psilocybin Services, best-effort) plus a curated list of established clinics, telehealth platforms and research centers, flagged `verified` only when a regulator record backs them
 - **OpenAlex Enrichment** - Refreshes citation counts and open-access flags on stored papers
 - **Readout Calendar** - `/api/readouts` derives expected trial results windows from completion dates — the sector's earnings calendar
 - **Postgres or JSON storage** - Set `DATABASE_URL` to store in Postgres; falls back to JSON files
@@ -54,6 +55,7 @@ cp .env.example .env
 | `NCBI_API_KEY` | API key for PubMed (increases rate limit from 3/sec to 10/sec) | No |
 | `LEGISCAN_API_KEY` | LegiScan key for state bills (free at legiscan.com/legiscan); Federal Register works without it | No |
 | `OPENALEX_MAILTO` | Email for the OpenAlex polite pool (faster, more reliable) | No |
+| `OREGON_PSILOCYBIN_API` | Override for the Oregon Psilocybin Services licensee directory endpoint used by the care crawler | No |
 | `LOG_LEVEL` | Logging level: debug, info, warn, error | No |
 | `RUN_ON_START` | Scheduler: run all crawlers immediately on startup | No |
 | `SCHEDULE_<CRAWLER>` | Scheduler: cron override per crawler, e.g. `SCHEDULE_JOBS="30 7 * * *"` | No |
@@ -117,9 +119,28 @@ npm run crawl:preprints
 # NIH research grants
 npm run crawl:grants
 
+# Licensed care providers + curated clinics
+npm run crawl:care
+
 # Refresh citation counts from OpenAlex
 npm run enrich:openalex
 ```
+
+### Substance taxonomy
+
+Every record is tagged against one shared taxonomy (`src/utils/substances.ts`):
+Psilocybin, MDMA, Ketamine, LSD, DMT, 5-MeO-DMT, Ibogaine, Ayahuasca, Cannabis,
+Mescaline, Kratom, Kava, Salvia, Kanna, Amanita Muscaria. Adding a substance
+there (pattern + query term) flows through every crawler and the API.
+
+### Seed vs crawled data
+
+`npm run seed` writes only first-boot content whose ids match what the
+crawlers produce (the curated company and people lists, projected recurring
+events, curated care providers and training programs). Trials, papers, jobs,
+legislation, funding and grants come exclusively from crawls.
+`npm run db:cleanup-legacy` (run automatically by `deploy:start`) removes the
+placeholder rows earlier seed versions wrote.
 
 ### Run the Scheduler
 

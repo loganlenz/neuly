@@ -11,7 +11,7 @@ Browser ── index.html (served by Express, React vendored locally)
               │  same-origin /api/*
 Express (crawlers/src/server.ts) ── Postgres (or JSON files if no DATABASE_URL)
               ▲
-Scheduler (crawlers/src/scheduler.ts) ── 11 crawlers on cron cadences
+Scheduler (crawlers/src/scheduler.ts) ── 12 crawlers on cron cadences
 ```
 
 ## Option A — Render (fastest, recommended)
@@ -22,10 +22,13 @@ Scheduler (crawlers/src/scheduler.ts) ── 11 crawlers on cron cadences
    - `neuly-db` (Postgres)
    - `neuly-web` (API + frontend, health-checked at `/api/health`)
    - `neuly-scheduler` (worker; `RUN_ON_START=true` triggers a full crawl immediately)
-3. First deploy: the web service migrates the schema, seeds starter data,
-   and serves the site. Within the first hour the scheduler's initial crawl
-   replaces seed data with live data from ClinicalTrials.gov, PubMed, SEC
-   EDGAR, Federal Register, NIH RePORTER, bioRxiv/medRxiv, and the ATS boards.
+3. First deploy: the web service migrates the schema, removes any legacy
+   placeholder seed rows, seeds starter data (curated companies/people,
+   recurring events, curated care providers, training programs), and serves
+   the site. Within the first hour the scheduler's initial crawl — run in
+   dependency order (trials → papers → grants → companies → funding → jobs
+   → people → ...) — fills every dataset from ClinicalTrials.gov, PubMed,
+   Europe PMC, SEC EDGAR, Federal Register, NIH RePORTER and the ATS boards.
 4. Custom domain: neuly-web → Settings → Custom Domains → add your domain,
    then set the `SITE_URL` env var to it (drives sitemap/canonical/Stripe URLs).
 
@@ -50,12 +53,13 @@ docker run -e DATABASE_URL=postgres://... -e RUN_ON_START=true neuly npm run sch
 | `NCBI_API_KEY` | scheduler | PubMed rate limit 3/s → 10/s |
 | `OPENALEX_MAILTO` | scheduler | OpenAlex polite pool |
 | `RUN_ON_START=true` | scheduler | crawl everything immediately on boot |
+| `OREGON_PSILOCYBIN_API` | scheduler | override for the Oregon licensee directory endpoint (care crawler) |
 
 ## Launch-day checklist
 
 - [ ] Blueprint deployed, `/api/health` returns `{"status":"ok"}`
 - [ ] Site shows the **Live Data** badge (bottom-right, desktop)
-- [ ] First crawl finished — dashboard counts exceed seed values (8/8/15/15/12/12)
+- [ ] First crawl finished — `/api/stats` shows thousands of trials and papers, 100+ companies, and no crawl errors in `crawlHistory`
 - [ ] `SESSION_SECRET` set (Render generates it automatically)
 - [ ] Custom domain + `SITE_URL` set; `https://<domain>/sitemap.xml` renders
 - [ ] Google Search Console: submit sitemap (programmatic SEO pages are the funnel)

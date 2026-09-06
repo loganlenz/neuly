@@ -11,7 +11,13 @@ const SUBSTANCE_PATTERNS: Array<[Substance, RegExp]> = [
   ['Ibogaine', /ibogaine|iboga\b|noribogaine/i],
   ['Ayahuasca', /ayahuasca|banisteriopsis/i],
   ['Cannabis', /cannabis|cannabinoid|marijuana|\bthc\b|\bcbd\b/i],
-  ['Mescaline', /mescaline|peyote/i]
+  ['Mescaline', /mescaline|peyote|san pedro|huachuma|wachuma|echinopsis pachanoi|trichocereus/i],
+  // Plant and fungal medicines beyond the classic psychedelics
+  ['Kratom', /kratom|mitragyn|7-hydroxymitragynine|speciosa/i],
+  ['Kava', /\bkava\b|kavalactone|piper methysticum/i],
+  ['Salvia', /salvinorin|salvia divinorum/i],
+  ['Kanna', /\bkanna\b|sceletium|mesembrine/i],
+  ['Amanita Muscaria', /amanita muscaria|muscimol|ibotenic acid/i]
 ];
 
 /**
@@ -51,5 +57,10 @@ export const SUBSTANCE_QUERY_TERMS = [
   'ibogaine',
   'ayahuasca',
   'mescaline',
+  'kratom',
+  'kava',
+  'salvinorin',
+  'sceletium',
+  'muscimol',
   'psychedelic'
 ] as const;

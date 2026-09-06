@@ -24,8 +24,9 @@ const SIGNIFICANT_FIELDS: Partial<Record<DataType, string[]>> = {
   events: ['startDate', 'endDate'],
   educational_resources: [],
   legislation: ['status', 'lastAction', 'lastActionDate'],
-  funding_events: ['formType'],
-  grants: ['awardAmount', 'fiscalYear']
+  funding_events: ['formType', 'totalAmountSold'],
+  grants: ['awardAmount', 'fiscalYear'],
+  care_providers: ['licenseStatus', 'website']
 };
 
 const ENTITY_LABELS: Record<DataType, string> = {
@@ -38,7 +39,8 @@ const ENTITY_LABELS: Record<DataType, string> = {
   educational_resources: 'educational resource',
   legislation: 'bill / regulatory action',
   funding_events: 'funding event',
-  grants: 'research grant'
+  grants: 'research grant',
+  care_providers: 'care provider'
 };
 
 /**

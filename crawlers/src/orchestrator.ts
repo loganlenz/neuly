@@ -14,11 +14,12 @@ import { CrawlResult } from './core/BaseCrawler.js';
 import { DataType } from './utils/storage.js';
 import { StorageBackend, createStorage } from './utils/storageBackend.js';
 import { logger } from './utils/logger.js';
-import { Company, ResearchPaper, CrawledData } from './models/types.js';
+import { CareCrawler } from './crawlers/CareCrawler.js';
+import { Company, ResearchPaper, ClinicalTrial, Grant, CrawledData } from './models/types.js';
 
 export type CrawlerName =
   | 'clinicaltrials' | 'pubmed' | 'companies' | 'jobs' | 'events' | 'people'
-  | 'legislation' | 'funding' | 'preprints' | 'grants' | 'openalex'
+  | 'legislation' | 'funding' | 'preprints' | 'grants' | 'openalex' | 'care'
   | 'all';
 
 interface CrawlerRun {
@@ -95,7 +96,12 @@ export class CrawlerOrchestrator {
     this.crawlers.set('companies', {
       type: 'companies',
       fullSnapshot: false,
-      run: () => new CompanyCrawler().crawl()
+      run: async () => {
+        // Industry sponsors of stored trials become companies, alongside the
+        // curated list and SEC full-text discovery.
+        const trials = await this.storage.load<ClinicalTrial>('clinical_trials');
+        return new CompanyCrawler({ trials }).crawl();
+      }
     });
 
     this.crawlers.set('jobs', {
@@ -119,7 +125,22 @@ export class CrawlerOrchestrator {
     this.crawlers.set('people', {
       type: 'people',
       fullSnapshot: false,
-      run: () => new PeopleCrawler().crawl()
+      run: async () => {
+        // Curated figures plus investigators, grant PIs and prolific authors
+        // derived from the stored trials, grants and papers.
+        const [trials, grants, papers] = await Promise.all([
+          this.storage.load<ClinicalTrial>('clinical_trials'),
+          this.storage.load<Grant>('grants'),
+          this.storage.load<ResearchPaper>('research_papers')
+        ]);
+        return new PeopleCrawler({ trials, grants, papers }).crawl();
+      }
+    });
+
+    this.crawlers.set('care', {
+      type: 'care_providers',
+      fullSnapshot: false,
+      run: () => new CareCrawler().crawl()
     });
 
     this.crawlers.set('legislation', {
@@ -131,7 +152,11 @@ export class CrawlerOrchestrator {
     this.crawlers.set('funding', {
       type: 'funding_events',
       fullSnapshot: false,
-      run: () => new FundingCrawler().crawl()
+      run: async () => {
+        // Every company with a resolved SEC CIK has its Form D filings pulled
+        const companies = await this.storage.load<Company>('companies');
+        return new FundingCrawler({ companies }).crawl();
+      }
     });
 
     // Preprints feed the shared research_papers dataset
@@ -222,8 +247,14 @@ export class CrawlerOrchestrator {
     logger.info('');
 
     const results: CrawlerRun[] = [];
+    // Dependent crawlers (companies ← trials, funding/jobs ← companies,
+    // people ← trials/grants/papers) run after their inputs.
+    const allOrder = [
+      'clinicaltrials', 'pubmed', 'preprints', 'grants', 'companies', 'funding', 'jobs', 'people',
+      'events', 'legislation', 'care', 'openalex'
+    ];
     const toRun = crawlerName === 'all'
-      ? Array.from(this.crawlers.entries())
+      ? allOrder.filter(name => this.crawlers.has(name)).map(name => [name, this.crawlers.get(name)!] as const)
       : this.crawlers.has(crawlerName)
         ? [[crawlerName, this.crawlers.get(crawlerName)!] as const]
         : [];

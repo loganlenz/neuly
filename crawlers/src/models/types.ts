@@ -15,6 +15,11 @@ export const SUBSTANCES = [
   'Ayahuasca',
   'Cannabis',
   'Mescaline',
+  'Kratom',
+  'Kava',
+  'Salvia',
+  'Kanna',
+  'Amanita Muscaria',
   'Other'
 ] as const;
 
@@ -82,7 +87,15 @@ export const ClinicalTrialSchema = z.object({
   })),
   substances: z.array(z.enum(SUBSTANCES)),
   sponsor: z.string().optional(),
+  /** ClinicalTrials.gov lead sponsor class: INDUSTRY, NIH, FED, OTHER_GOV, OTHER, ... */
+  sponsorClass: z.string().optional(),
   collaborators: z.array(z.string()).optional(),
+  /** Principal investigators / study chairs listed on the record */
+  officials: z.array(z.object({
+    name: z.string(),
+    affiliation: z.string().optional(),
+    role: z.string().optional()
+  })).optional(),
   enrollment: z.number().optional(),
   startDate: z.string().optional(),
   completionDate: z.string().optional(),
@@ -178,11 +191,18 @@ export const CompanySchema = z.object({
   website: z.string().url().optional(),
   linkedIn: z.string().url().optional(),
   twitter: z.string().optional(),
+  cik: z.string().optional(),
+  sic: z.string().optional(),
+  sicDescription: z.string().optional(),
   secFilings: z.array(z.object({
     type: z.string(),
     date: z.string(),
     url: z.string().url()
   })).optional(),
+  /** Where this company record came from (curated list, SEC EDGAR, ClinicalTrials.gov sponsor, ...) */
+  source: z.string().optional(),
+  /** Evidence supporting inclusion, e.g. NCT ids sponsored or SEC filing counts */
+  evidence: z.array(z.string()).optional(),
   news: z.array(z.object({
     title: z.string(),
     date: z.string(),
@@ -236,6 +256,10 @@ export const PersonSchema = z.object({
   linkedIn: z.string().url().optional(),
   twitter: z.string().optional(),
   imageUrl: z.string().url().optional(),
+  /** Provenance: curated, ClinicalTrials.gov investigator, NIH RePORTER PI, PubMed author corpus */
+  source: z.string().optional(),
+  /** Evidence supporting inclusion, e.g. NCT ids, grant numbers, paper counts */
+  evidence: z.array(z.string()).optional(),
   crawledAt: z.string()
 });
 
@@ -347,6 +371,7 @@ export type EducationalResource = z.infer<typeof EducationalResourceSchema>;
 export type LegislationBill = z.infer<typeof LegislationBillSchema>;
 export type FundingEvent = z.infer<typeof FundingEventSchema>;
 export type Grant = z.infer<typeof GrantSchema>;
+export type CareProvider = z.infer<typeof CareProviderSchema>;
 
 // Union type for all crawled data
 export type CrawledData =
@@ -359,7 +384,8 @@ export type CrawledData =
   | EducationalResource
   | LegislationBill
   | FundingEvent
-  | Grant;
+  | Grant
+  | CareProvider;
 
 // Legislation / Regulatory Item Schema
 // State bills (LegiScan) and federal regulatory documents (Federal Register)
@@ -390,8 +416,55 @@ export const FundingEventSchema = z.object({
   accessionNumber: z.string(),
   substances: z.array(z.enum(SUBSTANCES)).optional(),
   matchedTerms: z.array(z.string()).optional(),
+  /** Parsed from the Form D primary document when available */
+  totalOfferingAmount: z.number().optional(),
+  totalAmountSold: z.number().optional(),
+  totalRemaining: z.number().optional(),
+  investorCount: z.number().optional(),
+  industryGroup: z.string().optional(),
+  securityTypes: z.array(z.string()).optional(),
+  issuerCity: z.string().optional(),
+  issuerState: z.string().optional(),
+  relatedPersons: z.array(z.object({
+    name: z.string(),
+    roles: z.array(z.string())
+  })).optional(),
   url: z.string().url(),
   source: z.string(),
+  crawledAt: z.string()
+});
+
+// Care Provider Schema — licensed service centers, clinics, telehealth
+// platforms and retreats. Licensed rows come from state regulators
+// (Oregon Psilocybin Services); the rest is a curated, verified list.
+export const CARE_PROVIDER_TYPES = [
+  'Clinic', 'Service Center', 'Telehealth', 'Retreat', 'Healing Center', 'Research Center', 'Other'
+] as const;
+
+export const CareProviderSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  type: z.enum(CARE_PROVIDER_TYPES),
+  substances: z.array(z.enum(SUBSTANCES)),
+  services: z.array(z.string()).optional(),
+  location: z.object({
+    city: z.string().optional(),
+    state: z.string().optional(),
+    country: z.string().optional(),
+    address: z.string().optional()
+  }).optional(),
+  website: z.string().url().optional(),
+  phone: z.string().optional(),
+  email: z.string().optional(),
+  acceptsInsurance: z.boolean().optional(),
+  licenseType: z.string().optional(),
+  licenseNumber: z.string().optional(),
+  licenseStatus: z.string().optional(),
+  /** true when the record comes from a regulator or was manually verified */
+  verified: z.boolean(),
+  description: z.string().optional(),
+  source: z.string(),
+  sourceUrl: z.string().url().optional(),
   crawledAt: z.string()
 });
 
