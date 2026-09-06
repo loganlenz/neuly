@@ -35,3 +35,6 @@ Thumbs.db
 # Coverage
 coverage/
 .nyc_output/
+
+# Local data dir (also as a symlink)
+data
