@@ -21,6 +21,8 @@ interface DiscoveryCache {
 }
 
 const MISS_RETRY_DAYS = 7;
+/** Write the discovery cache after this many probed companies */
+const SAVE_EVERY = 10;
 
 /** Corporate suffixes that ATS slugs usually drop */
 const NAME_SUFFIXES = [
@@ -76,6 +78,7 @@ export class AtsDiscovery {
   private client: AxiosInstance;
   private cachePath: string;
   private requestDelayMs: number;
+  private rateLimited = new Set<AtsProvider>();
 
   constructor(options: { cacheDir?: string; requestDelayMs?: number } = {}) {
     this.cachePath = join(options.cacheDir ?? join(process.cwd(), 'data'), 'ats_boards.json');
@@ -99,16 +102,15 @@ export class AtsDiscovery {
     const cache = this.loadCache();
     const knownCompanies = new Set(cache.boards.map(b => companyKey(b.company)));
     const now = Date.now();
+    let probed = 0;
 
     for (const name of companyNames) {
       const key = companyKey(name);
       if (knownCompanies.has(key)) continue;
-
       const lastMiss = cache.misses[key];
       if (lastMiss && now - Date.parse(lastMiss) < MISS_RETRY_DAYS * 24 * 60 * 60 * 1000) {
         continue;
       }
-
       const boards = await this.probeCompany(name);
       if (boards.length > 0) {
         cache.boards.push(...boards);
@@ -119,32 +121,33 @@ export class AtsDiscovery {
         cache.misses[key] = new Date().toISOString();
         logger.debug(`[AtsDiscovery] No ATS board found for ${name}`);
       }
+      // Persist as we go: a long first run over a hundred-plus companies must
+      // not lose its work if the process is stopped part-way.
+      if (++probed % SAVE_EVERY === 0) this.saveCache(cache);
     }
-
     this.saveCache(cache);
     return cache.boards;
   }
 
   /**
-   * Try every provider with every slug candidate; first hit per provider wins.
+   * Probe one company: the four providers run in parallel, each walking the
+   * slug candidates in order until one answers. A provider that rate-limits
+   * us (429) is skipped for the rest of the run rather than hammered.
    */
   private async probeCompany(companyName: string): Promise<AtsBoard[]> {
     const candidates = slugCandidates(companyName);
-    const boards: AtsBoard[] = [];
     const providers: AtsProvider[] = ['greenhouse', 'lever', 'ashby', 'workable'];
-
-    for (const provider of providers) {
+    const results = await Promise.all(providers.map(async provider => {
+      if (this.rateLimited.has(provider)) return null;
       for (const slug of candidates) {
         await this.delay(this.requestDelayMs);
         const board = await this.probe(provider, slug, companyName);
-        if (board) {
-          boards.push(board);
-          break; // one board per provider is enough
-        }
+        if (board) return board;
+        if (this.rateLimited.has(provider)) return null;
       }
-    }
-
-    return boards;
+      return null;
+    }));
+    return results.filter((b): b is AtsBoard => b !== null);
   }
 
   private async probe(provider: AtsProvider, slug: string, company: string): Promise<AtsBoard | null> {
@@ -184,6 +187,10 @@ export class AtsDiscovery {
         }
       }
     } catch (error) {
+      if (axios.isAxiosError(error) && error.response?.status === 429 && !this.rateLimited.has(provider)) {
+        this.rateLimited.add(provider);
+        logger.warn(`[AtsDiscovery] ${provider} is rate limiting probes (429); skipping it for the rest of this run`);
+      }
       logger.debug(`[AtsDiscovery] Probe failed for ${provider}/${slug}: ${error instanceof Error ? error.message : 'Unknown error'}`);
       return null;
     }
