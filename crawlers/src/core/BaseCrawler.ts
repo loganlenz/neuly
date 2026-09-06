@@ -251,12 +251,25 @@ export function parseDate(dateStr: string | undefined | null): string | undefine
 /**
  * Helper function to clean and normalize text
  */
-export function cleanText(text: string | undefined | null): string | undefined {
-  if (!text) return undefined;
-  return text
-    .replace(/\s+/g, ' ')
-    .replace(/[\r\n]+/g, ' ')
-    .trim();
+export function cleanText(text: unknown): string | undefined {
+  if (text === undefined || text === null || text === '') return undefined;
+  // XML parsers hand back numbers for numeric nodes and { '#text', ... } objects
+  // for elements with attributes or inline markup (<ArticleTitle>…<i>…</i>).
+  let value: string;
+  if (typeof text === 'string') {
+    value = text;
+  } else if (typeof text === 'number' || typeof text === 'boolean') {
+    value = String(text);
+  } else if (typeof text === 'object') {
+    const node = text as Record<string, unknown>;
+    value = typeof node['#text'] === 'string' || typeof node['#text'] === 'number'
+      ? String(node['#text'])
+      : Object.values(node).filter(v => typeof v === 'string' || typeof v === 'number').map(String).join(' ');
+  } else {
+    return undefined;
+  }
+  const cleaned = value.replace(/\s+/g, ' ').replace(/[\r\n]+/g, ' ').trim();
+  return cleaned || undefined;
 }
 
 /**

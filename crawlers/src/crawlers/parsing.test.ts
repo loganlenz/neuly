@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { PubMedCrawler } from './PubMedCrawler.js';
 import { JobCrawler } from './JobCrawler.js';
+import { cleanText } from '../core/BaseCrawler.js';
 
 // Access private helpers through the prototype: these regressions shipped
 // to production, so the exact behaviours are pinned here.
@@ -48,5 +49,14 @@ describe('JobCrawler.parseLocation', () => {
     expect(jobs.parseLocation('Remote - United States')).toEqual({ country: 'United States', remote: true });
     expect(jobs.parseLocation('Berlin, Germany (Remote)')).toMatchObject({ city: 'Berlin', country: 'Germany', remote: true });
     expect(jobs.parseLocation('')).toEqual({ remote: false });
+  });
+
+  it('cleanText tolerates parser output that is not a plain string', () => {
+    expect(cleanText('  two\n lines ')).toBe('two lines');
+    expect(cleanText(2024)).toBe('2024');
+    expect(cleanText({ '#text': 'Psilocybin for depression', '@_Label': 'TITLE' })).toBe('Psilocybin for depression');
+    expect(cleanText({ i: 'in vivo', '#text': 'Effects' })).toBe('Effects');
+    expect(cleanText(undefined)).toBeUndefined();
+    expect(cleanText('')).toBeUndefined();
   });
 });

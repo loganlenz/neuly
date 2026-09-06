@@ -69,6 +69,8 @@ export function normalizePersonName(name: string): string {
     .replace(/[,;:\-\s]+$/, '');
 
   if (!text || /\d/.test(text)) return '';
+  // "DEBORAH C. MASH" → "Deborah C. Mash" (initials stay as written)
+  text = text.split(' ').map(w => (w.length > 2 && w === w.toUpperCase() ? w[0] + w.slice(1).toLowerCase() : w)).join(' ');
   const words = text.split(' ');
   if (words.length < 2 || words.length > 5) return '';
   if (NOT_A_PERSON.test(text)) return '';

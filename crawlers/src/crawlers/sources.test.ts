@@ -117,6 +117,8 @@ describe('PeopleCrawler derivation', () => {
     expect(normalizePersonName('Francisney P Nascimento, 1')).toBe('Francisney P Nascimento');
     expect(normalizePersonName('Ahmed S Abd El Azeem, Residant')).toBe('Ahmed S Abd El Azeem');
     expect(personKey('Dr. Carlos Zarate')).toBe(personKey('Carlos A Zarate'));
+    expect(normalizePersonName('DEBORAH C. MASH')).toBe('Deborah C. Mash');
+    expect(normalizePersonName('Romain COLLE')).toBe('Romain Colle');
     expect(personKey('Robin L. Carhart-Harris')).toBe('robin carhart-harris');
 
     const trial: ClinicalTrial = {
