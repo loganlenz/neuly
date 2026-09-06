@@ -52,7 +52,7 @@ cp .env.example .env
 | Variable | Description | Required |
 |----------|-------------|----------|
 | `DATABASE_URL` | Postgres connection string; when set, data is stored in Postgres instead of JSON files | No |
-| `NCBI_API_KEY` | API key for PubMed (increases rate limit from 3/sec to 10/sec) | No |
+| `NCBI_API_KEY` | API key for PubMed (raises the E-utilities limit from 3/sec to 10/sec; strongly recommended — a full crawl fetches ~10,000 articles) | No |
 | `LEGISCAN_API_KEY` | LegiScan key for state bills (free at legiscan.com/legiscan); Federal Register works without it | No |
 | `OPENALEX_MAILTO` | Email for the OpenAlex polite pool (faster, more reliable) | No |
 | `OREGON_PSILOCYBIN_API` | Override for the Oregon Psilocybin Services licensee directory endpoint used by the care crawler | No |

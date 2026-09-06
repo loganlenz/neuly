@@ -196,12 +196,9 @@ export class PubMedCrawler extends BaseCrawler<ResearchPaper> {
             fetchParams.api_key = this.apiKey;
           }
 
-          const response = await this.client.get('/efetch.fcgi', {
-            params: fetchParams,
-            responseType: 'text'
-          });
+          const response = await this.request<string>('/efetch.fcgi', { params: fetchParams, responseType: 'text' });
 
-          const parsed = this.xmlParser.parse(response.data) as PubMedFetchResult;
+          const parsed = this.xmlParser.parse(response) as PubMedFetchResult;
           const articles = parsed.PubmedArticleSet?.PubmedArticle;
 
           if (articles) {
