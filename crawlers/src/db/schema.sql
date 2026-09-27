@@ -180,6 +180,24 @@ CREATE TABLE IF NOT EXISTS newsletter_issues (
   generated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Industry news: press coverage (Google News) + material SEC 8-K filings
+CREATE TABLE IF NOT EXISTS news (
+  id            TEXT PRIMARY KEY,
+  data          JSONB NOT NULL,
+  source        TEXT,
+  first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Latest quotes + 1-month closes for publicly traded companies
+CREATE TABLE IF NOT EXISTS market_quotes (
+  id            TEXT PRIMARY KEY,
+  data          JSONB NOT NULL,
+  source        TEXT,
+  first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys (user_id);
 CREATE INDEX IF NOT EXISTS idx_alerts_user ON alert_subscriptions (user_id);
 CREATE INDEX IF NOT EXISTS idx_saved_items_user ON saved_items (user_id, created_at DESC);
@@ -192,6 +210,7 @@ CREATE INDEX IF NOT EXISTS idx_legislation_data ON legislation USING gin (data);
 CREATE INDEX IF NOT EXISTS idx_funding_events_data ON funding_events USING gin (data);
 CREATE INDEX IF NOT EXISTS idx_grants_data ON grants USING gin (data);
 CREATE INDEX IF NOT EXISTS idx_care_providers_data ON care_providers USING gin (data);
+CREATE INDEX IF NOT EXISTS idx_news_published ON news ((data->>'publishedAt') DESC);
 CREATE INDEX IF NOT EXISTS idx_change_events_detected ON change_events (detected_at DESC);
 CREATE INDEX IF NOT EXISTS idx_change_events_entity ON change_events (entity_type, entity_id);
 CREATE INDEX IF NOT EXISTS idx_crawl_runs_type ON crawl_runs (data_type, ran_at DESC);

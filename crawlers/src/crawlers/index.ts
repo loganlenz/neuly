@@ -12,3 +12,5 @@ export { FundingCrawler } from './FundingCrawler.js';
 export { PreprintCrawler } from './PreprintCrawler.js';
 export { GrantsCrawler } from './GrantsCrawler.js';
 export { CareCrawler } from './CareCrawler.js';
+export { NewsCrawler } from './NewsCrawler.js';
+export { MarketCrawler } from './MarketCrawler.js';

@@ -15,7 +15,9 @@ export type DataType =
   | 'legislation'
   | 'funding_events'
   | 'grants'
-  | 'care_providers';
+  | 'care_providers'
+  | 'news'
+  | 'market_quotes';
 
 export const ALL_DATA_TYPES: readonly DataType[] = [
   'clinical_trials',
@@ -28,7 +30,9 @@ export const ALL_DATA_TYPES: readonly DataType[] = [
   'legislation',
   'funding_events',
   'grants',
-  'care_providers'
+  'care_providers',
+  'news',
+  'market_quotes'
 ];
 
 interface StorageOptions {
@@ -47,6 +51,19 @@ export interface DataManifest {
     duration: number;
     error?: string;
   }>;
+  /**
+   * Latest run per dataset. crawlHistory is capped at the 100 most recent
+   * runs, which fast feeds (news, quotes) fill within hours — this keeps
+   * the weekly/daily datasets' freshness visible regardless.
+   */
+  lastRuns?: Partial<Record<DataType, DatasetRun>>;
+}
+
+export interface DatasetRun {
+  lastAttemptAt: string;
+  lastSuccessAt?: string;
+  count: number;
+  lastError?: string;
 }
 
 /**
@@ -230,6 +247,15 @@ export class DataStorage implements StorageBackend {
       duration: 0,
       ...(error ? { error } : {})
     });
+
+    const now = new Date().toISOString();
+    const priorRun = manifest.lastRuns?.[type];
+    manifest.lastRuns = {
+      ...(manifest.lastRuns ?? {}),
+      [type]: error
+        ? { lastAttemptAt: now, lastSuccessAt: priorRun?.lastSuccessAt, count: priorRun?.count ?? 0, lastError: error }
+        : { lastAttemptAt: now, lastSuccessAt: now, count: Math.max(0, count) }
+    };
 
     // Keep only last 100 history entries
     if (manifest.crawlHistory.length > 100) {
