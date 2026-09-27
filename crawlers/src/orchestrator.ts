@@ -15,11 +15,14 @@ import { DataType } from './utils/storage.js';
 import { StorageBackend, createStorage } from './utils/storageBackend.js';
 import { logger } from './utils/logger.js';
 import { CareCrawler } from './crawlers/CareCrawler.js';
+import { NewsCrawler } from './crawlers/NewsCrawler.js';
+import { MarketCrawler } from './crawlers/MarketCrawler.js';
 import { Company, ResearchPaper, ClinicalTrial, Grant, CrawledData } from './models/types.js';
 
 export type CrawlerName =
   | 'clinicaltrials' | 'pubmed' | 'companies' | 'jobs' | 'events' | 'people'
   | 'legislation' | 'funding' | 'preprints' | 'grants' | 'openalex' | 'care'
+  | 'news' | 'markets'
   | 'all';
 
 interface CrawlerRun {
@@ -159,6 +162,28 @@ export class CrawlerOrchestrator {
       }
     });
 
+    // Industry news: Google News coverage + material SEC filings by every
+    // tracked company with a CIK.
+    this.crawlers.set('news', {
+      type: 'news',
+      fullSnapshot: false,
+      run: async () => {
+        const companies = await this.storage.load<Company>('companies');
+        return new NewsCrawler({ companies }).crawl();
+      }
+    });
+
+    // Quotes for every company with a ticker. One row per ticker, so the
+    // crawl is a full snapshot of the listed universe.
+    this.crawlers.set('markets', {
+      type: 'market_quotes',
+      fullSnapshot: false,
+      run: async () => {
+        const companies = await this.storage.load<Company>('companies');
+        return new MarketCrawler({ companies }).crawl();
+      }
+    });
+
     // Preprints feed the shared research_papers dataset
     this.crawlers.set('preprints', {
       type: 'research_papers',
@@ -251,7 +276,7 @@ export class CrawlerOrchestrator {
     // people ← trials/grants/papers) run after their inputs.
     const allOrder = [
       'clinicaltrials', 'pubmed', 'preprints', 'grants', 'companies', 'funding', 'jobs', 'people',
-      'events', 'legislation', 'care', 'openalex'
+      'events', 'legislation', 'care', 'news', 'markets', 'openalex'
     ];
     const toRun = crawlerName === 'all'
       ? allOrder.filter(name => this.crawlers.has(name)).map(name => [name, this.crawlers.get(name)!] as const)

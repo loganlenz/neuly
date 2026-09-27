@@ -3,7 +3,7 @@ import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { CrawledData, ChangeEvent } from '../models/types.js';
-import { DataType, DataManifest, ALL_DATA_TYPES } from './storage.js';
+import { DataType, DataManifest, DatasetRun, ALL_DATA_TYPES } from './storage.js';
 import { StorageBackend, ChangeEventQuery } from './storageBackend.js';
 import { logger } from './logger.js';
 
@@ -125,9 +125,38 @@ export class PostgresStorage implements StorageBackend {
        FROM crawl_runs ORDER BY ran_at DESC LIMIT 100`
     );
 
+    // Latest attempt and latest success per dataset, independent of the
+    // 100-row history window that frequent feeds would otherwise crowd out.
+    const [latestAttempts, latestSuccesses] = await Promise.all([
+      this.pool.query(
+        `SELECT DISTINCT ON (data_type) data_type, item_count, error, ran_at
+         FROM crawl_runs ORDER BY data_type, ran_at DESC`
+      ),
+      this.pool.query(
+        `SELECT DISTINCT ON (data_type) data_type, item_count, ran_at
+         FROM crawl_runs WHERE error IS NULL ORDER BY data_type, ran_at DESC`
+      )
+    ]);
+    const lastRuns: Partial<Record<DataType, DatasetRun>> = {};
+    for (const row of latestAttempts.rows) {
+      lastRuns[row.data_type as DataType] = {
+        lastAttemptAt: row.ran_at.toISOString(),
+        count: row.item_count,
+        ...(row.error ? { lastError: row.error } : {})
+      };
+    }
+    for (const row of latestSuccesses.rows) {
+      const run = lastRuns[row.data_type as DataType];
+      if (run) {
+        run.lastSuccessAt = row.ran_at.toISOString();
+        if (run.lastError) run.count = row.item_count;
+      }
+    }
+
     return {
       lastUpdated: history.rows[0]?.ran_at?.toISOString?.() ?? new Date().toISOString(),
       counts,
+      lastRuns,
       crawlHistory: history.rows.reverse().map(row => ({
         type: row.data_type as DataType,
         timestamp: row.ran_at.toISOString(),

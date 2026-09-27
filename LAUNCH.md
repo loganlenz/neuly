@@ -11,8 +11,17 @@ Browser ── index.html (served by Express, React vendored locally)
               │  same-origin /api/*
 Express (crawlers/src/server.ts) ── Postgres (or JSON files if no DATABASE_URL)
               ▲
-Scheduler (crawlers/src/scheduler.ts) ── 12 crawlers on cron cadences
+Scheduler (crawlers/src/scheduler.ts) ── 14 crawlers on two lanes
+                                         live: news every 15 min, quotes every 5 min
+                                         bulk: registries/filings/literature hourly→daily
+Browser ◀── /api/live (Server-Sent Events) ── web server polls the change log
+            every 10s while anyone is connected and pushes new changes;
+            open pages refetch only the datasets that changed
 ```
+
+Cadences live in `crawlers/src/schedule.ts` (override any with
+`SCHEDULE_<CRAWLER>`); `/api/freshness` and the **Industry Live → Data
+Status** tab show the last successful crawl per dataset.
 
 ## Option A — Render (fastest, recommended)
 
@@ -58,7 +67,9 @@ docker run -e DATABASE_URL=postgres://... -e RUN_ON_START=true neuly npm run sch
 ## Launch-day checklist
 
 - [ ] Blueprint deployed, `/api/health` returns `{"status":"ok"}`
-- [ ] Site shows the **Live Data** badge (bottom-right, desktop)
+- [ ] Site shows the **Live · synced …** badge (bottom-right, desktop) and
+      Industry Live reads **STREAMING LIVE** (if a proxy buffers SSE it falls
+      back to **LIVE · POLLING**, still refreshing every minute)
 - [ ] First crawl finished — `/api/stats` shows thousands of trials and papers, 100+ companies, and no crawl errors in `crawlHistory`
 - [ ] `SESSION_SECRET` set (Render generates it automatically)
 - [ ] Custom domain + `SITE_URL` set; `https://<domain>/sitemap.xml` renders
@@ -86,6 +97,24 @@ docker run -e DATABASE_URL=postgres://... -e RUN_ON_START=true neuly npm run sch
   tables with linked sources; agents and query history persist locally.
 - **All buttons work** — studies link to ClinicalTrials.gov, jobs to their
   ATS posting, events/courses/providers to their sites.
+
+## Real-time industry layer
+
+- **Industry Live page** (`● Live` in the nav): streamed change feed, news,
+  SEC filings, stock quotes, policy, funding, grants, readouts, and a
+  per-dataset data-status panel. The homepage and every company profile
+  carry a live band (quote + latest headlines/filings).
+- **News crawler** — Google News (substance, regulatory and per-company
+  searches, quote-page spam filtered) plus every recent material SEC filing
+  (8-K/6-K with item labels, 10-Q/10-K/20-F, S-1/S-3/424B, Form 4 insider
+  trades, 13D/13G) by tracked companies.
+- **Market crawler** — delayed quotes + 1-month history for every listed
+  company. Tickers follow the SEC's current CIK→ticker map (renames such
+  as MindMed→DFTX are automatic) and a quote is only attributed when the
+  listing name matches the company, so recycled symbols (NUMI is now a
+  Nuveen ETF) and stale listings are dropped. Big moves (±5/10/20%) land in
+  the change log and alerts.
+- **Alerts** now dispatch hourly instead of daily.
 
 ## Known post-launch work (in priority order)
 

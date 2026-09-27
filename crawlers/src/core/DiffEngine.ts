@@ -26,7 +26,10 @@ const SIGNIFICANT_FIELDS: Partial<Record<DataType, string[]>> = {
   legislation: ['status', 'lastAction', 'lastActionDate'],
   funding_events: ['formType', 'totalAmountSold'],
   grants: ['awardAmount', 'fiscalYear'],
-  care_providers: ['licenseStatus', 'website']
+  care_providers: ['licenseStatus', 'website'],
+  news: [],
+  // Only bucket crossings (e.g. flat → up 10%+) are news; every tick is not
+  market_quotes: ['moveBucket']
 };
 
 const ENTITY_LABELS: Record<DataType, string> = {
@@ -40,7 +43,9 @@ const ENTITY_LABELS: Record<DataType, string> = {
   legislation: 'bill / regulatory action',
   funding_events: 'funding event',
   grants: 'research grant',
-  care_providers: 'care provider'
+  care_providers: 'care provider',
+  news: 'news item',
+  market_quotes: 'stock'
 };
 
 /**
@@ -133,6 +138,9 @@ export class DiffEngine {
   }
 
   private titleOf(item: CrawledData): string {
+    if ('ticker' in item && typeof item.ticker === 'string' && 'companyName' in item) {
+      return `${item.ticker} (${item.companyName})`;
+    }
     if ('title' in item && typeof item.title === 'string') return item.title;
     if ('name' in item && typeof item.name === 'string') return item.name;
     return item.id;

@@ -23,6 +23,8 @@
     "crawl:grants": "tsx src/index.ts --crawler=grants",
     "enrich:openalex": "tsx src/index.ts --crawler=openalex",
     "crawl:care": "tsx src/index.ts --crawler=care",
+    "crawl:news": "tsx src/index.ts --crawler=news",
+    "crawl:markets": "tsx src/index.ts --crawler=markets",
     "schedule": "tsx src/scheduler.ts",
     "db:migrate": "tsx src/db/migrate.ts",
     "seed": "tsx src/seed.ts",

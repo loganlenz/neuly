@@ -372,6 +372,8 @@ export type LegislationBill = z.infer<typeof LegislationBillSchema>;
 export type FundingEvent = z.infer<typeof FundingEventSchema>;
 export type Grant = z.infer<typeof GrantSchema>;
 export type CareProvider = z.infer<typeof CareProviderSchema>;
+export type NewsItem = z.infer<typeof NewsItemSchema>;
+export type MarketQuote = z.infer<typeof MarketQuoteSchema>;
 
 // Union type for all crawled data
 export type CrawledData =
@@ -385,7 +387,9 @@ export type CrawledData =
   | LegislationBill
   | FundingEvent
   | Grant
-  | CareProvider;
+  | CareProvider
+  | NewsItem
+  | MarketQuote;
 
 // Legislation / Regulatory Item Schema
 // State bills (LegiScan) and federal regulatory documents (Federal Register)
@@ -483,6 +487,53 @@ export const GrantSchema = z.object({
   endDate: z.string().optional(),
   substances: z.array(z.enum(SUBSTANCES)),
   url: z.string().url().optional(),
+  source: z.string(),
+  crawledAt: z.string()
+});
+
+// Industry News Schema — press coverage (Google News) and material SEC
+// filings (8-K current reports). The fastest-moving feed on the platform.
+export const NEWS_CATEGORIES = ['News', 'SEC Filing'] as const;
+
+export const NewsItemSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  url: z.string().url(),
+  publisher: z.string().optional(),
+  publishedAt: z.string(),
+  summary: z.string().optional(),
+  category: z.enum(NEWS_CATEGORIES),
+  substances: z.array(z.enum(SUBSTANCES)),
+  /** Tracked companies named in the item */
+  companies: z.array(z.string()),
+  /** The search/filing query that surfaced the item */
+  query: z.string().optional(),
+  source: z.string(),
+  crawledAt: z.string()
+});
+
+// Market Quote Schema — latest price + 1-month daily closes for each
+// publicly traded company in the companies table.
+export const MarketQuoteSchema = z.object({
+  id: z.string(),
+  ticker: z.string(),
+  companyId: z.string().optional(),
+  companyName: z.string(),
+  exchange: z.string().optional(),
+  currency: z.string().optional(),
+  price: z.number(),
+  previousClose: z.number().optional(),
+  change: z.number().optional(),
+  changePercent: z.number().optional(),
+  dayHigh: z.number().optional(),
+  dayLow: z.number().optional(),
+  volume: z.number().optional(),
+  fiftyTwoWeekHigh: z.number().optional(),
+  fiftyTwoWeekLow: z.number().optional(),
+  /** Coarse move bucket ('flat', 'up 5%+', 'down 10%+', ...) — lets the diff engine flag big moves */
+  moveBucket: z.string().optional(),
+  marketTime: z.string().optional(),
+  history: z.array(z.object({ date: z.string(), close: z.number() })),
   source: z.string(),
   crawledAt: z.string()
 });

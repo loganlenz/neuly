@@ -233,6 +233,25 @@
     // Data Context for sharing API data across components
     const DataContext = createContext(null);
 
+    // Datasets held in context, the API call that loads each, and the
+    // change-log entity types that should trigger a refetch of it.
+    const DATASET_LOADERS = {
+      companies: () => api.getCompanies({ limit: 1000 }),
+      people: () => api.getPeople({ limit: 2000 }),
+      clinicalTrials: () => api.getClinicalTrials({ limit: 3000 }),
+      researchPapers: () => api.getResearchPapers({ limit: 2000 }),
+      jobs: () => api.getJobs({ limit: 1000 }),
+      events: () => api.getEvents({ limit: 500 }),
+      education: () => api.getEducation({ limit: 500 })
+    };
+    const ENTITY_TO_DATASET = {
+      companies: 'companies', people: 'people', clinical_trials: 'clinicalTrials', research_papers: 'researchPapers',
+      jobs: 'jobs', events: 'events', educational_resources: 'education'
+    };
+    // A cold-start crawl lands thousands of changes in bursts; refetch a
+    // dataset at most this often so the browser isn't hammered.
+    const MIN_REFETCH_MS = 30000;
+
     const DataProvider = ({ children }) => {
       const [apiData, setApiData] = useState({
         companies: [],
@@ -246,43 +265,49 @@
         loading: true,
         error: null,
         usingApi: false,
-        attempts: 0
+        attempts: 0,
+        // Live layer: streamed change events, per-dataset freshness, and a
+        // version counter pages watch to refetch their own endpoints.
+        liveEvents: [],
+        liveTypes: [],
+        freshness: [],
+        liveVersion: 0,
+        lastSync: null,
+        liveStatus: 'connecting'
       });
 
       useEffect(() => {
         let cancelled = false;
         let attempt = 0;
+        let source = null;
+        let pollTimer = null;
+        let refetchTimer = null;
+        const pendingKeys = new Set();
+        const lastFetchedAt = {};
+        let pollCursor = new Date().toISOString();
 
         const fetchData = async () => {
           try {
             const dashboard = await api.getDashboard();
             if (!dashboard || !dashboard.counts) throw new Error('API unreachable');
 
-            const [companiesRes, peopleRes, trialsRes, papersRes, jobsRes, eventsRes, educationRes] = await Promise.all([
-              api.getCompanies({ limit: 1000 }),
-              api.getPeople({ limit: 2000 }),
-              api.getClinicalTrials({ limit: 3000 }),
-              api.getResearchPapers({ limit: 2000 }),
-              api.getJobs({ limit: 1000 }),
-              api.getEvents({ limit: 500 }),
-              api.getEducation({ limit: 500 })
-            ]);
+            const keys = Object.keys(DATASET_LOADERS);
+            const results = await Promise.all(keys.map(k => DATASET_LOADERS[k]()));
             if (cancelled) return true;
+            const loaded = {};
+            keys.forEach((k, i) => { loaded[k] = results[i]?.data || []; lastFetchedAt[k] = Date.now(); });
+            lastFetchedAt.__stats = Date.now();
 
-            setApiData({
-              companies: companiesRes?.data || [],
-              people: peopleRes?.data || [],
-              clinicalTrials: trialsRes?.data || [],
-              researchPapers: papersRes?.data || [],
-              jobs: jobsRes?.data || [],
-              events: eventsRes?.data || [],
-              education: educationRes?.data || [],
+            setApiData(prev => ({
+              ...prev,
+              ...loaded,
               stats: dashboard,
               loading: false,
               error: null,
               usingApi: true,
-              attempts: 0
-            });
+              attempts: 0,
+              lastSync: new Date().toISOString()
+            }));
             console.log('✅ Connected to Neuly API - using live data');
             return true;
           } catch (error) {
@@ -291,6 +316,98 @@
             }
             return false;
           }
+        };
+
+        // Refetch only the datasets the new changes touched, plus the
+        // dashboard counts ('__stats'), each throttled to MIN_REFETCH_MS.
+        const loaderFor = (k) => (k === '__stats' ? api.getDashboard() : DATASET_LOADERS[k]());
+        const flushRefetch = async () => {
+          refetchTimer = null;
+          const now = Date.now();
+          const waiting = [...pendingKeys];
+          const due = waiting.filter(k => !lastFetchedAt[k] || now - lastFetchedAt[k] >= MIN_REFETCH_MS);
+          const deferred = waiting.filter(k => !due.includes(k));
+          due.forEach(k => { pendingKeys.delete(k); lastFetchedAt[k] = now; });
+          if (deferred.length > 0) {
+            const wait = Math.max(1000, ...deferred.map(k => MIN_REFETCH_MS - (now - lastFetchedAt[k])));
+            refetchTimer = setTimeout(flushRefetch, wait);
+          }
+          if (due.length === 0) return;
+          const results = await Promise.all(due.map(loaderFor));
+          if (cancelled) return;
+          setApiData(prev => {
+            const next = { ...prev, lastSync: new Date().toISOString() };
+            due.forEach((k, i) => {
+              const res = results[i];
+              if (k === '__stats') { if (res && res.counts) next.stats = res; }
+              else if (res && res.data) next[k] = res.data;
+            });
+            return next;
+          });
+        };
+
+        const scheduleRefetch = (types) => {
+          pendingKeys.add('__stats');
+          (types || []).forEach(t => { if (ENTITY_TO_DATASET[t]) pendingKeys.add(ENTITY_TO_DATASET[t]); });
+          if (!refetchTimer) refetchTimer = setTimeout(flushRefetch, 2000);
+        };
+
+        const applyChanges = (payload) => {
+          if (!payload) return;
+          const events = payload.events || [];
+          if (events.length === 0 && !payload.freshness) return;
+          setApiData(prev => {
+            const known = new Set(prev.liveEvents.map(e => e.id));
+            const fresh = events.filter(e => !known.has(e.id));
+            return {
+              ...prev,
+              liveEvents: [...fresh, ...prev.liveEvents].slice(0, 300),
+              liveTypes: payload.types || prev.liveTypes,
+              freshness: payload.freshness || prev.freshness,
+              liveVersion: events.length > 0 ? prev.liveVersion + 1 : prev.liveVersion,
+              lastSync: new Date().toISOString()
+            };
+          });
+          if (events.length > 0) scheduleRefetch(payload.types || events.map(e => e.entityType));
+        };
+
+        // Fallback when streaming isn't available (old browsers, proxies
+        // that buffer SSE): poll the change log once a minute.
+        const startPolling = () => {
+          if (pollTimer || cancelled) return;
+          setApiData(prev => ({ ...prev, liveStatus: 'polling' }));
+          const tick = async () => {
+            const res = await api.get(`/changes?since=${encodeURIComponent(pollCursor)}&limit=200`);
+            const events = (res && res.data) || [];
+            if (events.length > 0) {
+              pollCursor = events.reduce((max, e) => (e.detectedAt > max ? e.detectedAt : max), pollCursor);
+              const fresh = await api.get('/freshness');
+              applyChanges({ events, types: [...new Set(events.map(e => e.entityType))], freshness: fresh && fresh.data });
+            }
+          };
+          pollTimer = setInterval(tick, 60000);
+        };
+
+        const startStream = () => {
+          if (typeof EventSource === 'undefined') { startPolling(); return; }
+          let failures = 0;
+          source = new EventSource(`${API_BASE_URL}/live`, { withCredentials: true });
+          source.addEventListener('hello', (e) => {
+            failures = 0;
+            let data = null;
+            try { data = JSON.parse(e.data); } catch (err) { /* ignore malformed frame */ }
+            if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+            setApiData(prev => ({ ...prev, liveStatus: 'streaming', freshness: (data && data.freshness) || prev.freshness }));
+          });
+          source.addEventListener('changes', (e) => {
+            try { applyChanges(JSON.parse(e.data)); } catch (err) { /* ignore malformed frame */ }
+          });
+          source.onerror = () => {
+            failures += 1;
+            // EventSource reconnects on its own; after repeated failures
+            // keep data flowing through polling in the meantime.
+            if (failures >= 3) startPolling();
+          };
         };
 
         // Keep retrying with backoff until the API answers — the data layer
@@ -302,10 +419,17 @@
             const delay = Math.min(15000, 2000 * attempt);
             console.log(`⏳ API not reachable, retrying in ${delay / 1000}s`);
             setTimeout(run, delay);
+          } else if (ok && !cancelled) {
+            startStream();
           }
         };
         run();
-        return () => { cancelled = true; };
+        return () => {
+          cancelled = true;
+          if (source) source.close();
+          if (pollTimer) clearInterval(pollTimer);
+          if (refetchTimer) clearTimeout(refetchTimer);
+        };
       }, []);
 
       return React.createElement(DataContext.Provider, { value: apiData }, children);
@@ -656,11 +780,12 @@
     // everything else lives in the "More" sheet.
     const MOBILE_TABS = [
       ['dashboard', 'Home', '📊'],
+      ['live', 'Live', '⚡'],
       ['research', 'Research', '🔬'],
-      ['studies', 'Studies', '🧪'],
-      ['care', 'Care', '🏥']
+      ['studies', 'Studies', '🧪']
     ];
     const MOBILE_MORE_ITEMS = [
+      ['care', 'Care', '🏥'],
       ['companies', 'Companies', '🏢'],
       ['people', 'People', '👥'],
       ['jobs', 'Jobs', '💼'],
@@ -721,8 +846,8 @@
       }, []);
 
       const navItems = user
-        ? [['dashboard', 'Dashboard'], ['research', 'Research'], ['companies', 'Companies'], ['people', 'People'], ['education', 'Education'], ['care', 'Care'], ['studies', 'Studies']]
-        : [['research', 'Research'], ['companies', 'Companies'], ['people', 'People'], ['education', 'Education'], ['care', 'Care'], ['studies', 'Studies']];
+        ? [['dashboard', 'Dashboard'], ['live', '● Live'], ['research', 'Research'], ['companies', 'Companies'], ['people', 'People'], ['education', 'Education'], ['care', 'Care'], ['studies', 'Studies']]
+        : [['live', '● Live'], ['research', 'Research'], ['companies', 'Companies'], ['people', 'People'], ['education', 'Education'], ['care', 'Care'], ['studies', 'Studies']];
 
       // Mobile/tablet, signed in: iPhone-app chrome — slim top header with
       // the page context, tab buttons across the bottom.
@@ -769,7 +894,7 @@
                   </div>
                   {menuOpen && (
                     <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: '8px', width: '220px', background: 'rgba(20,25,23,0.98)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', padding: '8px', animation: 'slideUp 0.2s' }}>
-                      {[['dashboard', '📊 Dashboard'], ['research', '🔬 Research Agent'], ['companies', '🏢 Companies'], ['people', '👥 People'], ['jobs', '💼 Jobs'], ['events', '📅 Events'], ['education', '🎓 My Courses'], ['care', '🏥 Care Directory'], ['studies', '🧪 Clinical Studies']].map(([page, label]) => (
+                      {[['dashboard', '📊 Dashboard'], ['live', '⚡ Industry Live'], ['research', '🔬 Research Agent'], ['companies', '🏢 Companies'], ['people', '👥 People'], ['jobs', '💼 Jobs'], ['events', '📅 Events'], ['education', '🎓 My Courses'], ['care', '🏥 Care Directory'], ['studies', '🧪 Clinical Studies']].map(([page, label]) => (
                         <div key={page} onClick={() => { setCurrentPage(page); setMenuOpen(false); }} style={{ padding: '10px 16px', borderRadius: '8px', cursor: 'pointer', fontSize: '14px', color: '#a0a8a4' }}>{label}</div>
                       ))}
                       <div style={{ borderTop: '1px solid rgba(255,255,255,0.06)', marginTop: '8px', paddingTop: '8px' }}>
@@ -1073,15 +1198,17 @@
 
       // Latest database changes from the diff engine (/api/changes) — every
       // entry is a real crawl-detected event, not demo content.
+      // Refetched whenever the live stream reports new changes.
       const [changes, setChanges] = useState(null);
+      const liveVersion = apiData ? apiData.liveVersion : 0;
       useEffect(() => {
         let cancelled = false;
         api.get('/changes?limit=8').then(res => { if (!cancelled) setChanges((res && res.data) || []); });
         return () => { cancelled = true; };
-      }, []);
+      }, [liveVersion]);
 
-      const ENTITY_ICONS = { clinical_trials: '🧪', research_papers: '📄', companies: '🏢', people: '👤', jobs: '💼', events: '📅', legislation: '🏛️', funding_events: '💰', grants: '🎯', educational_resources: '🎓' };
-      const ENTITY_COLORS = { clinical_trials: '#f0b775', research_papers: '#a8c5e2', companies: '#7dd3c0', people: '#d4a5c9', jobs: '#98d4a0', events: '#e8c898', legislation: '#c084fc', funding_events: '#f0b775', grants: '#7dd3c0', educational_resources: '#a8c5e2' };
+      const ENTITY_ICONS = { clinical_trials: '🧪', research_papers: '📄', companies: '🏢', people: '👤', jobs: '💼', events: '📅', legislation: '🏛️', funding_events: '💰', grants: '🎯', educational_resources: '🎓', care_providers: '🏥', news: '📰', market_quotes: '📈' };
+      const ENTITY_COLORS = { clinical_trials: '#f0b775', research_papers: '#a8c5e2', companies: '#7dd3c0', people: '#d4a5c9', jobs: '#98d4a0', events: '#e8c898', legislation: '#c084fc', funding_events: '#f0b775', grants: '#7dd3c0', educational_resources: '#a8c5e2', care_providers: '#98d4a0', news: '#a8c5e2', market_quotes: '#7dd3c0' };
       const CHANGE_LABELS = { added: 'New', updated: 'Updated', removed: 'Removed' };
       const SAVE_TYPE_COLORS = { company: '#a8c5e2', person: '#d4a5c9', study: '#7dd3c0', trial: '#7dd3c0', course: '#f0b775' };
 
@@ -1096,6 +1223,7 @@
       })();
 
       const quickActions = [
+        { icon: '⚡', label: 'Industry Live', desc: 'News, filings, markets & policy', page: 'live', color: '#7dd3c0', gradient: 'linear-gradient(135deg, rgba(125,211,192,0.15) 0%, rgba(125,211,192,0.05) 100%)' },
         { icon: '🔬', label: 'Research Agent', desc: 'AI-powered literature search', page: 'research', color: '#7dd3c0', gradient: 'linear-gradient(135deg, rgba(125,211,192,0.15) 0%, rgba(125,211,192,0.05) 100%)' },
         { icon: '🏢', label: 'Companies', desc: 'Browse industry companies', page: 'companies', color: '#a8c5e2', gradient: 'linear-gradient(135deg, rgba(168,197,226,0.15) 0%, rgba(168,197,226,0.05) 100%)' },
         { icon: '👥', label: 'People', desc: 'Connect with leaders', page: 'people', color: '#d4a5c9', gradient: 'linear-gradient(135deg, rgba(212,165,201,0.15) 0%, rgba(212,165,201,0.05) 100%)' },
@@ -1128,7 +1256,7 @@
 
             <div style={{ marginBottom: '40px' }}>
               <h2 style={{ fontSize: '18px', fontWeight: 600, color: '#fff', marginBottom: '20px' }}>Quick Actions</h2>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '20px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '20px' }}>
                 {quickActions.map((action, i) => (
                   <div key={i} onClick={() => setCurrentPage(action.page)} style={{ padding: '28px', background: action.gradient, border: `1px solid ${action.color}30`, borderRadius: '20px', cursor: 'pointer', transition: 'all 0.3s', position: 'relative', overflow: 'hidden' }}>
                     <div style={{ position: 'absolute', top: '-20px', right: '-20px', width: '100px', height: '100px', borderRadius: '50%', background: `${action.color}10`, filter: 'blur(30px)' }} />
@@ -1634,6 +1762,8 @@
                 <SaveButton entityType="company" entityId={company.id} entityTitle={company.name} style={{ padding: '14px 28px' }} />
               </div>
             </div>
+
+            <CompanyLiveStrip company={company} />
 
             {/* Stats Grid */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '20px', marginBottom: '40px' }}>
@@ -2858,6 +2988,530 @@
       );
     };
 
+    // ============================================================
+    // LIVE INDUSTRY LAYER — news, filings, markets, policy, capital,
+    // readouts and the real-time change feed, all streamed from /api/live
+    // ============================================================
+    const liveAgo = (iso) => {
+      if (!iso) return 'never';
+      const secs = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
+      if (secs < 45) return 'just now';
+      const mins = Math.round(secs / 60);
+      if (mins < 60) return `${mins}m ago`;
+      const hours = Math.round(mins / 60);
+      if (hours < 36) return `${hours}h ago`;
+      const days = Math.round(hours / 24);
+      return days < 60 ? `${days}d ago` : new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    };
+    const fmtDate = (iso) => (iso ? new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—');
+    const fmtMoney = (n) => {
+      if (n == null || isNaN(n)) return '—';
+      if (n >= 1e9) return `$${(n / 1e9).toFixed(1)}B`;
+      if (n >= 1e6) return `$${(n / 1e6).toFixed(1)}M`;
+      if (n >= 1e3) return `$${Math.round(n / 1e3)}K`;
+      return `$${Math.round(n)}`;
+    };
+    const fmtPct = (n) => (n == null ? '—' : `${n > 0 ? '+' : ''}${n.toFixed(2)}%`);
+    const moveColor = (n) => (n == null || n === 0 ? '#a0a8a4' : n > 0 ? '#7dd3c0' : '#e57373');
+
+    const LIVE_ENTITY_META = {
+      clinical_trials: { icon: '🧪', label: 'Trial', color: '#f0b775' },
+      research_papers: { icon: '📄', label: 'Paper', color: '#a8c5e2' },
+      companies: { icon: '🏢', label: 'Company', color: '#7dd3c0' },
+      people: { icon: '👤', label: 'Person', color: '#d4a5c9' },
+      jobs: { icon: '💼', label: 'Job', color: '#98d4a0' },
+      events: { icon: '📅', label: 'Event', color: '#e8c898' },
+      educational_resources: { icon: '🎓', label: 'Course', color: '#a8c5e2' },
+      legislation: { icon: '🏛️', label: 'Policy', color: '#c084fc' },
+      funding_events: { icon: '💰', label: 'Funding', color: '#f0b775' },
+      grants: { icon: '🎯', label: 'Grant', color: '#7dd3c0' },
+      care_providers: { icon: '🏥', label: 'Care', color: '#98d4a0' },
+      news: { icon: '📰', label: 'News', color: '#a8c5e2' },
+      market_quotes: { icon: '📈', label: 'Market', color: '#7dd3c0' }
+    };
+    const DATASET_LABELS = {
+      clinical_trials: 'Clinical trials', research_papers: 'Papers & preprints', companies: 'Companies', people: 'People',
+      jobs: 'Jobs', events: 'Events', educational_resources: 'Education', legislation: 'Legislation & regulation',
+      funding_events: 'Funding (Form D)', grants: 'NIH grants', care_providers: 'Care providers', news: 'News & SEC filings',
+      market_quotes: 'Stock quotes'
+    };
+
+    /**
+     * Fetch an endpoint and refetch it whenever the live stream reports
+     * changes to one of `watchTypes` (or any change when omitted).
+     */
+    const useLiveEndpoint = (endpoint, watchTypes) => {
+      const apiData = useApiData();
+      const [state, setState] = useState({ data: null, loading: true });
+      const liveVersion = apiData ? apiData.liveVersion : 0;
+      const liveTypes = (apiData && apiData.liveTypes) || [];
+      const relevant = !watchTypes || liveTypes.some(t => watchTypes.includes(t));
+      const trigger = relevant ? liveVersion : 0;
+      useEffect(() => {
+        if (!endpoint) return undefined;
+        let cancelled = false;
+        api.get(endpoint).then(res => { if (!cancelled) setState({ data: res, loading: false }); });
+        return () => { cancelled = true; };
+      }, [endpoint, trigger]);
+      return state;
+    };
+
+    // Re-render once a minute so "5m ago" labels stay honest
+    const useMinuteTick = () => {
+      const [, setTick] = useState(0);
+      useEffect(() => { const t = setInterval(() => setTick(x => x + 1), 30000); return () => clearInterval(t); }, []);
+    };
+
+    const Sparkline = ({ points, width = 96, height = 28 }) => {
+      const values = (points || []).map(p => p.close).filter(v => typeof v === 'number');
+      if (values.length < 2) return <div style={{ width, height }} />;
+      const min = Math.min(...values), max = Math.max(...values);
+      const span = max - min || 1;
+      const d = values.map((v, i) => `${i === 0 ? 'M' : 'L'}${((i / (values.length - 1)) * width).toFixed(1)},${(height - 2 - ((v - min) / span) * (height - 4)).toFixed(1)}`).join(' ');
+      const color = values[values.length - 1] >= values[0] ? '#7dd3c0' : '#e57373';
+      return <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} aria-hidden="true"><path d={d} fill="none" stroke={color} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" /></svg>;
+    };
+
+    const LivePill = ({ label }) => (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '6px 14px', background: 'rgba(125,211,192,0.12)', border: '1px solid rgba(125,211,192,0.3)', borderRadius: '20px', fontSize: '12px', fontWeight: 600, color: '#7dd3c0', letterSpacing: '0.04em' }}>
+        <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#7dd3c0', animation: 'pulse 1.6s ease-in-out infinite' }} />
+        {label}
+      </span>
+    );
+
+    const Chip = ({ children, color = '#a0a8a4' }) => (
+      <span style={{ padding: '4px 10px', fontSize: '11px', fontWeight: 600, background: `${color}1f`, color, borderRadius: '5px', whiteSpace: 'nowrap' }}>{children}</span>
+    );
+
+    const EmptyState = ({ icon = '📡', title, body }) => (
+      <div style={{ textAlign: 'center', padding: '56px 24px' }}>
+        <div style={{ fontSize: '40px', marginBottom: '12px' }}>{icon}</div>
+        <h3 style={{ fontSize: '18px', fontWeight: 600, color: '#fff', marginBottom: '6px' }}>{title}</h3>
+        <p style={{ fontSize: '14px', color: '#6b7370', maxWidth: '460px', margin: '0 auto' }}>{body}</p>
+      </div>
+    );
+
+    const openUrl = (url) => { if (url) window.open(url, '_blank', 'noopener'); };
+
+    const rowStyle = { ...sharedStyles.card, padding: '18px 22px', display: 'flex', gap: '16px', alignItems: 'flex-start', cursor: 'pointer' };
+
+    const NewsList = ({ items, compact }) => (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: compact ? '10px' : '12px' }}>
+        {items.map(n => (
+          <div key={n.id} onClick={() => openUrl(n.url)} style={rowStyle}>
+            <div style={{ fontSize: '22px', lineHeight: 1 }}>{n.category === 'SEC Filing' ? '📑' : '📰'}</div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: compact ? '14px' : '15px', fontWeight: 600, color: '#fff', lineHeight: 1.4, marginBottom: '6px' }}>{n.title}</div>
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+                <span style={{ fontSize: '12px', color: '#6b7370' }}>{n.publisher || n.source} · {liveAgo(n.publishedAt)}</span>
+                {!compact && (n.substances || []).slice(0, 3).map(s => <Chip key={s} color={subColor(s)}>{s}</Chip>)}
+                {!compact && (n.companies || []).slice(0, 2).map(c => <Chip key={c} color="#a8c5e2">{c}</Chip>)}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+
+    const MarketTicker = ({ quotes }) => {
+      if (!quotes || quotes.length === 0) return null;
+      return (
+        <div style={{ display: 'flex', gap: '10px', overflowX: 'auto', paddingBottom: '6px', scrollbarWidth: 'thin' }}>
+          {quotes.map(q => (
+            <div key={q.id} title={q.companyName} style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 14px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '12px' }}>
+              <span style={{ fontWeight: 700, color: '#fff', fontSize: '13px' }}>{q.ticker}</span>
+              <span style={{ color: '#a0a8a4', fontSize: '13px' }}>{q.price.toFixed(2)}</span>
+              <span style={{ color: moveColor(q.changePercent), fontSize: '12px', fontWeight: 600 }}>{fmtPct(q.changePercent)}</span>
+            </div>
+          ))}
+        </div>
+      );
+    };
+
+    const ChangeFeed = ({ events }) => (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+        {events.map(e => {
+          const meta = LIVE_ENTITY_META[e.entityType] || { icon: '•', label: e.entityType, color: '#a0a8a4' };
+          return (
+            <div key={e.id} style={{ ...sharedStyles.card, padding: '14px 18px', display: 'flex', gap: '14px', alignItems: 'center' }}>
+              <div style={{ width: '38px', height: '38px', borderRadius: '10px', background: `${meta.color}1a`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px', flexShrink: 0 }}>{meta.icon}</div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: '14px', color: '#e8ebe9', lineHeight: 1.45, overflow: 'hidden', textOverflow: 'ellipsis' }}>{e.summary}</div>
+                <div style={{ display: 'flex', gap: '8px', marginTop: '4px', alignItems: 'center' }}>
+                  <Chip color={meta.color}>{meta.label}</Chip>
+                  <Chip color={e.changeType === 'added' ? '#7dd3c0' : e.changeType === 'removed' ? '#e57373' : '#f0b775'}>{e.changeType === 'added' ? 'New' : e.changeType === 'removed' ? 'Removed' : 'Updated'}</Chip>
+                  <span style={{ fontSize: '12px', color: '#6b7370' }}>{liveAgo(e.detectedAt)}</span>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+
+    const LiveFeedTab = () => {
+      const apiData = useApiData();
+      const { data, loading } = useLiveEndpoint('/changes?limit=150');
+      const [typeFilter, setTypeFilter] = useState('all');
+      const streamed = (apiData && apiData.liveEvents) || [];
+      const merged = [...streamed, ...((data && data.data) || [])];
+      const seen = new Set();
+      const events = merged
+        .filter(e => (seen.has(e.id) ? false : (seen.add(e.id), true)))
+        .filter(e => typeFilter === 'all' || e.entityType === typeFilter)
+        .sort((a, b) => b.detectedAt.localeCompare(a.detectedAt))
+        .slice(0, 200);
+      const types = ['all', ...Object.keys(LIVE_ENTITY_META)];
+      return (
+        <div>
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '20px' }}>
+            {types.map(t => (
+              <button key={t} onClick={() => setTypeFilter(t)} style={{ padding: '8px 14px', fontSize: '12px', fontWeight: 600, borderRadius: '20px', cursor: 'pointer', border: '1px solid rgba(255,255,255,0.08)', background: typeFilter === t ? '#7dd3c0' : 'rgba(255,255,255,0.03)', color: typeFilter === t ? '#0a0f0d' : '#a0a8a4' }}>
+                {t === 'all' ? 'Everything' : `${LIVE_ENTITY_META[t].icon} ${LIVE_ENTITY_META[t].label}`}
+              </button>
+            ))}
+          </div>
+          {loading && events.length === 0
+            ? <EmptyState icon="⏳" title="Loading the change feed…" body="Pulling every change detected across trials, papers, filings, bills, jobs and more." />
+            : events.length === 0
+              ? <EmptyState title="No changes in this window yet" body="New crawl results stream in here the moment they land — trials change status, bills move, companies file, jobs open." />
+              : <ChangeFeed events={events} />}
+        </div>
+      );
+    };
+
+    const NewsTab = ({ category }) => {
+      const [search, setSearch] = useState('');
+      const [substance, setSubstance] = useState('All');
+      const params = new URLSearchParams({ limit: '200' });
+      if (category) params.set('category', category);
+      if (substance !== 'All') params.set('substance', substance);
+      const { data, loading } = useLiveEndpoint(`/news?${params.toString()}`, ['news']);
+      const items = ((data && data.data) || []).filter(n => !search || n.title.toLowerCase().includes(search.toLowerCase()) || (n.companies || []).some(c => c.toLowerCase().includes(search.toLowerCase())));
+      return (
+        <div>
+          <div style={{ display: 'flex', gap: '12px', marginBottom: '20px', flexWrap: 'wrap' }}>
+            <input type="text" placeholder={category === 'SEC Filing' ? 'Filter filings by company…' : 'Filter headlines or companies…'} value={search} onChange={(e) => setSearch(e.target.value)} style={{ flex: 1, minWidth: '220px', padding: '12px 16px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', color: '#fff', fontSize: '14px', outline: 'none' }} />
+            <select value={substance} onChange={(e) => setSubstance(e.target.value)} style={{ padding: '12px 16px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', color: '#a0a8a4', fontSize: '14px' }}>
+              {['All', 'Psilocybin', 'MDMA', 'Ketamine', 'LSD', 'DMT', '5-MeO-DMT', 'Ibogaine', 'Ayahuasca', 'Mescaline', 'Kratom', 'Cannabis'].map(s => <option key={s} value={s}>{s === 'All' ? 'All substances' : s}</option>)}
+            </select>
+          </div>
+          {loading ? <EmptyState icon="⏳" title="Loading…" body="" />
+            : items.length === 0
+              ? <EmptyState icon={category === 'SEC Filing' ? '📑' : '📰'} title={category === 'SEC Filing' ? 'No filings yet' : 'No headlines yet'} body="The news crawler runs every 15 minutes; items appear here as soon as the first run completes." />
+              : <NewsList items={items} />}
+        </div>
+      );
+    };
+
+    const MarketsTab = () => {
+      const { data, loading } = useLiveEndpoint('/markets', ['market_quotes']);
+      const quotes = (data && data.data) || [];
+      const summary = (data && data.summary) || {};
+      const isMobile = useIsMobile();
+      if (loading) return <EmptyState icon="⏳" title="Loading quotes…" body="" />;
+      if (quotes.length === 0) return <EmptyState icon="📈" title="No quotes yet" body="Quotes refresh every 5 minutes during US market hours for every tracked public company." />;
+      return (
+        <div>
+          <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(2, minmax(0, 1fr))' : 'repeat(4, 1fr)', gap: '14px', marginBottom: '24px' }}>
+            {[
+              { label: 'Sector move (equal-weight)', value: fmtPct(summary.sectorChangePercent), color: moveColor(summary.sectorChangePercent) },
+              { label: 'Advancers', value: summary.advancers ?? 0, color: '#7dd3c0' },
+              { label: 'Decliners', value: summary.decliners ?? 0, color: '#e57373' },
+              { label: 'Quotes as of', value: summary.asOf ? liveAgo(summary.asOf) : '—', color: '#a8c5e2' }
+            ].map((s, i) => (
+              <div key={i} style={{ ...sharedStyles.card, padding: '18px', textAlign: 'center' }}>
+                <div style={{ fontFamily: '"Fraunces", serif', fontSize: '26px', fontWeight: 600, color: s.color }}>{s.value}</div>
+                <div style={{ fontSize: '12px', color: '#6b7370' }}>{s.label}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            {quotes.map(q => (
+              <div key={q.id} style={{ ...sharedStyles.card, padding: '16px 20px', display: 'grid', gridTemplateColumns: isMobile ? '1fr auto' : '90px 1fr 110px 110px 120px 100px', gap: '16px', alignItems: 'center' }}>
+                <div style={{ fontWeight: 700, color: '#fff', fontSize: '15px' }}>{q.ticker}</div>
+                {isMobile
+                  ? <div style={{ textAlign: 'right' }}><div style={{ color: '#fff', fontWeight: 600 }}>{q.price.toFixed(2)} <span style={{ fontSize: '11px', color: '#6b7370' }}>{q.currency}</span></div><div style={{ color: moveColor(q.changePercent), fontSize: '13px', fontWeight: 600 }}>{fmtPct(q.changePercent)}</div></div>
+                  : <>
+                      <div style={{ minWidth: 0 }}><div style={{ color: '#e8ebe9', fontSize: '14px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{q.companyName}</div><div style={{ color: '#6b7370', fontSize: '12px' }}>{q.exchange}</div></div>
+                      <div style={{ color: '#fff', fontWeight: 600 }}>{q.price.toFixed(2)} <span style={{ fontSize: '11px', color: '#6b7370' }}>{q.currency}</span></div>
+                      <div style={{ color: moveColor(q.changePercent), fontWeight: 600 }}>{fmtPct(q.changePercent)}</div>
+                      <Sparkline points={q.history} width={110} />
+                      <div style={{ color: '#6b7370', fontSize: '12px' }}>{q.volume != null ? `${(q.volume / 1e6).toFixed(2)}M vol` : '—'}</div>
+                    </>}
+              </div>
+            ))}
+          </div>
+          <p style={{ fontSize: '12px', color: '#4a524e', marginTop: '16px' }}>Delayed quotes. Tickers are resolved against the SEC's current CIK → ticker map and verified against the listing name, so renamed or recycled symbols are never misattributed.</p>
+        </div>
+      );
+    };
+
+    const PolicyTab = () => {
+      const [jurisdiction, setJurisdiction] = useState('All');
+      const { data, loading } = useLiveEndpoint('/legislation?limit=300', ['legislation']);
+      const bills = (data && data.data) || [];
+      const jurisdictions = ['All', ...Array.from(new Set(bills.map(b => b.jurisdiction))).sort()];
+      const shown = bills.filter(b => jurisdiction === 'All' || b.jurisdiction === jurisdiction);
+      if (loading) return <EmptyState icon="⏳" title="Loading…" body="" />;
+      return (
+        <div>
+          <select value={jurisdiction} onChange={(e) => setJurisdiction(e.target.value)} style={{ padding: '12px 16px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', color: '#a0a8a4', fontSize: '14px', marginBottom: '20px' }}>
+            {jurisdictions.map(j => <option key={j} value={j}>{j === 'All' ? `All jurisdictions (${bills.length})` : j}</option>)}
+          </select>
+          {shown.length === 0 ? <EmptyState icon="🏛️" title="No bills or rules yet" body="State bills (LegiScan) and federal DEA/FDA/HHS actions (Federal Register) are checked hourly." /> : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              {shown.map(b => (
+                <div key={b.id} onClick={() => openUrl(b.url)} style={rowStyle}>
+                  <div style={{ fontSize: '22px' }}>🏛️</div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '6px' }}>
+                      <Chip color="#c084fc">{b.jurisdiction}</Chip>
+                      <Chip color="#a0a8a4">{b.billNumber}</Chip>
+                      {b.status && <Chip color="#f0b775">{b.status}</Chip>}
+                      {(b.substances || []).slice(0, 3).map(s => <Chip key={s} color={subColor(s)}>{s}</Chip>)}
+                    </div>
+                    <div style={{ fontSize: '15px', fontWeight: 600, color: '#fff', lineHeight: 1.4 }}>{b.title}</div>
+                    <div style={{ fontSize: '12px', color: '#6b7370', marginTop: '4px' }}>{b.lastAction ? `${b.lastAction} · ` : ''}{fmtDate(b.lastActionDate)}{b.agencies && b.agencies.length ? ` · ${b.agencies.join(', ')}` : ''}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    };
+
+    const FundingTab = () => {
+      const { data, loading } = useLiveEndpoint('/funding?limit=200', ['funding_events']);
+      const rounds = (data && data.data) || [];
+      if (loading) return <EmptyState icon="⏳" title="Loading…" body="" />;
+      if (rounds.length === 0) return <EmptyState icon="💰" title="No funding filings yet" body="SEC Form D filings by every tracked company are checked hourly on weekdays." />;
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          {rounds.map(f => (
+            <div key={f.id} onClick={() => openUrl(f.url)} style={rowStyle}>
+              <div style={{ fontSize: '22px' }}>💰</div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: '15px', fontWeight: 600, color: '#fff' }}>{f.companyName}</div>
+                <div style={{ fontSize: '12px', color: '#6b7370', marginTop: '4px' }}>Form {f.formType} · filed {fmtDate(f.filedAt)}{f.industryGroup ? ` · ${f.industryGroup}` : ''}</div>
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                <div style={{ fontFamily: '"Fraunces", serif', fontSize: '20px', fontWeight: 600, color: '#f0b775' }}>{fmtMoney(f.totalAmountSold)}</div>
+                <div style={{ fontSize: '11px', color: '#6b7370' }}>{f.totalOfferingAmount ? `of ${fmtMoney(f.totalOfferingAmount)} offered` : 'raised'}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      );
+    };
+
+    const GrantsTab = () => {
+      const { data, loading } = useLiveEndpoint('/grants?limit=200', ['grants']);
+      const grants = (data && data.data) || [];
+      if (loading) return <EmptyState icon="⏳" title="Loading…" body="" />;
+      if (grants.length === 0) return <EmptyState icon="🎯" title="No grants yet" body="NIH RePORTER awards for psychedelic research refresh daily." />;
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          {grants.map(g => (
+            <div key={g.id} onClick={() => openUrl(g.url)} style={rowStyle}>
+              <div style={{ fontSize: '22px' }}>🎯</div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: '15px', fontWeight: 600, color: '#fff', lineHeight: 1.4 }}>{g.title}</div>
+                <div style={{ fontSize: '12px', color: '#6b7370', marginTop: '4px' }}>{(g.piNames || []).slice(0, 2).join(', ')}{g.organization ? ` · ${g.organization}` : ''}{g.fiscalYear ? ` · FY${g.fiscalYear}` : ''}</div>
+              </div>
+              <div style={{ fontFamily: '"Fraunces", serif', fontSize: '20px', fontWeight: 600, color: '#7dd3c0' }}>{fmtMoney(g.awardAmount)}</div>
+            </div>
+          ))}
+        </div>
+      );
+    };
+
+    const ReadoutsTab = () => {
+      const { data, loading } = useLiveEndpoint('/readouts?limit=200', ['clinical_trials']);
+      const readouts = (data && data.data) || [];
+      if (loading) return <EmptyState icon="⏳" title="Loading…" body="" />;
+      if (readouts.length === 0) return <EmptyState icon="🗓️" title="No upcoming readouts" body="Expected results windows are derived from registered trial completion dates, refreshed every 2 hours." />;
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          {readouts.map(r => (
+            <div key={r.trialId || r.nctId} onClick={() => openUrl(r.url || (r.nctId ? `https://clinicaltrials.gov/study/${r.nctId}` : null))} style={rowStyle}>
+              <div style={{ minWidth: '96px', textAlign: 'center' }}>
+                <div style={{ fontFamily: '"Fraunces", serif', fontSize: '17px', fontWeight: 600, color: '#f0b775' }}>{r.expectedReadoutStart ? new Date(r.expectedReadoutStart).toLocaleDateString('en-US', { month: 'short', year: 'numeric' }) : '—'}</div>
+                <div style={{ fontSize: '11px', color: '#6b7370' }}>{r.expectedReadoutEnd ? `to ${new Date(r.expectedReadoutEnd).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}` : ''}</div>
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '6px' }}>
+                  {r.phase && <Chip color="#a8c5e2">{r.phase}</Chip>}
+                  {(r.substances || []).slice(0, 3).map(s => <Chip key={s} color={subColor(s)}>{s}</Chip>)}
+                </div>
+                <div style={{ fontSize: '15px', fontWeight: 600, color: '#fff', lineHeight: 1.4 }}>{r.title}</div>
+                <div style={{ fontSize: '12px', color: '#6b7370', marginTop: '4px' }}>{r.sponsor}{r.nctId ? ` · ${r.nctId}` : ''}{r.status ? ` · ${r.status}` : ''}{r.enrollment ? ` · n=${r.enrollment}` : ''}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      );
+    };
+
+    const FreshnessTab = () => {
+      const apiData = useApiData();
+      const { data, loading } = useLiveEndpoint('/freshness');
+      useMinuteTick();
+      const rows = (apiData && apiData.freshness && apiData.freshness.length ? apiData.freshness : (data && data.data)) || [];
+      if (loading && rows.length === 0) return <EmptyState icon="⏳" title="Loading…" body="" />;
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          {rows.map(r => {
+            const meta = LIVE_ENTITY_META[r.type] || { icon: '•', color: '#a0a8a4' };
+            const healthy = r.lastSuccessAt && !r.lastError;
+            return (
+              <div key={r.type} style={{ ...sharedStyles.card, padding: '16px 20px', display: 'flex', gap: '16px', alignItems: 'center' }}>
+                <div style={{ fontSize: '22px' }}>{meta.icon}</div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: '15px', fontWeight: 600, color: '#fff' }}>{DATASET_LABELS[r.type] || r.type}</div>
+                  <div style={{ fontSize: '12px', color: '#6b7370', marginTop: '2px' }}>{(r.cadence || []).join(' · ') || 'Curated'}</div>
+                  {r.lastError && <div style={{ fontSize: '12px', color: '#e57373', marginTop: '4px' }}>Last run failed: {String(r.lastError).slice(0, 140)}</div>}
+                </div>
+                <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                  <div style={{ fontFamily: '"Fraunces", serif', fontSize: '20px', fontWeight: 600, color: meta.color }}>{(r.count || 0).toLocaleString()}</div>
+                  <div style={{ fontSize: '12px', color: healthy ? '#7dd3c0' : r.lastError ? '#e57373' : '#6b7370' }}>{r.lastSuccessAt ? `updated ${liveAgo(r.lastSuccessAt)}` : 'awaiting first crawl'}</div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      );
+    };
+
+    const LIVE_TABS = [
+      ['feed', '⚡ Live Feed'],
+      ['news', '📰 News'],
+      ['filings', '📑 SEC Filings'],
+      ['markets', '📈 Markets'],
+      ['policy', '🏛️ Policy'],
+      ['funding', '💰 Funding'],
+      ['grants', '🎯 Grants'],
+      ['readouts', '🗓️ Readouts'],
+      ['status', '🩺 Data Status']
+    ];
+
+    const LivePage = () => {
+      const apiData = useApiData();
+      const isMobile = useIsMobile();
+      const [tab, setTab] = useState('feed');
+      const { data: marketData } = useLiveEndpoint('/markets', ['market_quotes']);
+      useMinuteTick();
+      const counts = (apiData && apiData.stats && apiData.stats.counts) || {};
+      const status = apiData ? apiData.liveStatus : 'connecting';
+      const statusLabel = status === 'streaming' ? 'STREAMING LIVE' : status === 'polling' ? 'LIVE · POLLING' : 'CONNECTING';
+
+      const tiles = [
+        { label: 'Trials', value: counts.clinicalTrials, color: '#f0b775' },
+        { label: 'Papers', value: counts.researchPapers, color: '#a8c5e2' },
+        { label: 'Companies', value: counts.companies, color: '#7dd3c0' },
+        { label: 'Headlines & filings', value: counts.news, color: '#a8c5e2' },
+        { label: 'Bills & rules', value: counts.legislation, color: '#c084fc' },
+        { label: 'Funding rounds', value: counts.fundingEvents, color: '#f0b775' }
+      ];
+
+      const body = {
+        feed: <LiveFeedTab />,
+        news: <NewsTab category="News" />,
+        filings: <NewsTab category="SEC Filing" />,
+        markets: <MarketsTab />,
+        policy: <PolicyTab />,
+        funding: <FundingTab />,
+        grants: <GrantsTab />,
+        readouts: <ReadoutsTab />,
+        status: <FreshnessTab />
+      }[tab];
+
+      return (
+        <div style={{ position: 'relative', zIndex: 1, paddingTop: '100px', minHeight: '100vh' }}>
+          <div style={{ padding: isMobile ? '20px 16px' : '40px', maxWidth: '1280px', margin: '0 auto' }}>
+            <div style={{ textAlign: 'center', marginBottom: '32px' }}>
+              <div style={{ marginBottom: '16px' }}><LivePill label={statusLabel} /></div>
+              <h1 style={{ fontFamily: '"Fraunces", serif', fontSize: isMobile ? '32px' : '42px', fontWeight: 600, color: '#fff', marginBottom: '12px' }}>Industry Live</h1>
+              <p style={{ fontSize: isMobile ? '15px' : '18px', color: '#a0a8a4', maxWidth: '680px', margin: '0 auto' }}>
+                Every trial, paper, filing, bill, funding round, headline and stock move in psychedelic medicine — updated the moment our crawlers detect it.
+              </p>
+              <p style={{ fontSize: '12px', color: '#4a524e', marginTop: '10px' }}>Last sync {liveAgo(apiData && apiData.lastSync)}</p>
+            </div>
+
+            <div style={{ marginBottom: '24px' }}><MarketTicker quotes={(marketData && marketData.data) || []} /></div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(2, minmax(0, 1fr))' : 'repeat(6, 1fr)', gap: '12px', marginBottom: '28px' }}>
+              {tiles.map(t => (
+                <div key={t.label} style={{ ...sharedStyles.card, padding: '16px', textAlign: 'center' }}>
+                  <div style={{ fontFamily: '"Fraunces", serif', fontSize: '24px', fontWeight: 600, color: t.color }}>{t.value != null ? Number(t.value).toLocaleString() : '—'}</div>
+                  <div style={{ fontSize: '12px', color: '#6b7370' }}>{t.label}</div>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ display: 'flex', gap: '8px', overflowX: 'auto', marginBottom: '24px', paddingBottom: '4px', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+              {LIVE_TABS.map(([key, label]) => (
+                <button key={key} onClick={() => setTab(key)} style={{ flexShrink: 0, padding: '12px 16px', background: 'transparent', border: 'none', borderBottom: tab === key ? '2px solid #7dd3c0' : '2px solid transparent', color: tab === key ? '#7dd3c0' : '#a0a8a4', fontSize: '14px', fontWeight: 600, cursor: 'pointer' }}>{label}</button>
+              ))}
+            </div>
+
+            {body}
+          </div>
+        </div>
+      );
+    };
+
+    // Homepage band: live headlines + market ticker, linking into the Live page
+    const LiveHomeSection = ({ setCurrentPage }) => {
+      const { data: newsData } = useLiveEndpoint('/news?limit=6&category=News', ['news']);
+      const { data: marketData } = useLiveEndpoint('/markets', ['market_quotes']);
+      const isMobile = useIsMobile();
+      useMinuteTick();
+      const news = (newsData && newsData.data) || [];
+      const quotes = (marketData && marketData.data) || [];
+      if (news.length === 0 && quotes.length === 0) return null;
+      return (
+        <section style={{ ...sharedStyles.section, padding: isMobile ? '60px 16px' : '80px 40px', position: 'relative', zIndex: 1 }}>
+          <div style={{ textAlign: 'center', marginBottom: '32px' }}>
+            <div style={{ marginBottom: '16px' }}><LivePill label="LIVE" /></div>
+            <h2 style={{ ...sharedStyles.sectionTitle, fontSize: isMobile ? '30px' : '42px' }}>What's happening right now</h2>
+            <p style={sharedStyles.sectionSubtitle}>Headlines, SEC filings and stock moves across the psychedelic medicine industry, refreshed continuously.</p>
+          </div>
+          <div style={{ marginBottom: '20px' }}><MarketTicker quotes={quotes} /></div>
+          <NewsList items={news} compact />
+          <div style={{ textAlign: 'center', marginTop: '28px' }}>
+            <button onClick={() => { setCurrentPage('live'); window.scrollTo(0, 0); }} style={sharedStyles.buttonOutline}>Open Industry Live →</button>
+          </div>
+        </section>
+      );
+    };
+
+    // Company profile band: live quote + the company's latest news & filings
+    const CompanyLiveStrip = ({ company }) => {
+      const { data: newsData } = useLiveEndpoint(`/news?company=${encodeURIComponent(company.name)}&limit=8`, ['news']);
+      const { data: marketData } = useLiveEndpoint(company.ticker || company.stage === 'Public' ? '/markets' : null, ['market_quotes']);
+      const news = (newsData && newsData.data) || [];
+      const quote = ((marketData && marketData.data) || []).find(q => q.companyId === company.id || (company.ticker && q.ticker === String(company.ticker).toUpperCase()));
+      if (news.length === 0 && !quote) return null;
+      return (
+        <div style={{ ...sharedStyles.card, marginBottom: '40px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px', marginBottom: news.length ? '20px' : 0 }}>
+            <LivePill label="LIVE" />
+            {quote && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                <span style={{ fontWeight: 700, color: '#fff' }}>{quote.ticker}</span>
+                <span style={{ fontFamily: '"Fraunces", serif', fontSize: '24px', color: '#fff' }}>{quote.price.toFixed(2)} <span style={{ fontSize: '12px', color: '#6b7370' }}>{quote.currency}</span></span>
+                <span style={{ color: moveColor(quote.changePercent), fontWeight: 600 }}>{fmtPct(quote.changePercent)}</span>
+                <Sparkline points={quote.history} width={120} height={32} />
+              </div>
+            )}
+          </div>
+          {news.length > 0 && <NewsList items={news} compact />}
+        </div>
+      );
+    };
+
     const Footer = () => (
       <footer style={{ borderTop: '1px solid rgba(255,255,255,0.06)', padding: '60px 40px 40px', position: 'relative', zIndex: 1 }}>
         <div style={{ maxWidth: '1280px', margin: '0 auto', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '24px' }}>
@@ -2902,6 +3556,7 @@
       const homePage = (
         <>
           <HeroSection setCurrentPage={setCurrentPage} openAuth={openAuth} />
+          <LiveHomeSection setCurrentPage={setCurrentPage} />
           <SubstancesSection />
           <ResearchHomeSection setCurrentPage={setCurrentPage} />
           <CompaniesHomeSection setCurrentPage={setCurrentPage} />
@@ -2938,6 +3593,8 @@
             return <JobsPage user={user} />;
           case 'events':
             return <EventsPage user={user} />;
+          case 'live':
+            return <LivePage />;
           default:
             return user ? <DashboardPage user={user} setCurrentPage={setCurrentPage} /> : homePage;
         }
@@ -2965,7 +3622,8 @@
       const isMobile = useIsMobile();
       if (!apiData) return null;
 
-      const { usingApi, loading, attempts } = apiData;
+      const { usingApi, loading, attempts, lastSync, liveStatus } = apiData;
+      useMinuteTick();
 
       // On mobile/tablet the pill would collide with the bottom tab bar
       if (isMobile) return null;
@@ -2976,7 +3634,9 @@
       // pretending a reconnect is imminent. Retries continue in the background.
       const offline = !usingApi && attempts >= 4;
       const color = usingApi ? '#7dd3c0' : offline ? '#e57373' : '#f0b775';
-      const label = usingApi ? 'Live Data' : offline ? 'API offline' : 'Connecting…';
+      const label = usingApi
+        ? `${liveStatus === 'streaming' ? 'Live' : 'Live Data'}${lastSync ? ` · synced ${liveAgo(lastSync)}` : ''}`
+        : offline ? 'API offline' : 'Connecting…';
 
       return (
         <div style={{

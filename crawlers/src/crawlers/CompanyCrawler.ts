@@ -126,8 +126,8 @@ export class CompanyCrawler extends BaseCrawler<Company> {
   private static readonly KNOWN_COMPANIES: KnownCompany[] = [
     { name: 'COMPASS Pathways', ticker: 'CMPS', type: 'Biotech', stage: 'Public', substances: ['Psilocybin'], focus: 'Treatment-Resistant Depression', website: 'https://compasspathways.com' },
     { name: 'Atai Life Sciences', ticker: 'ATAI', type: 'Biotech', stage: 'Public', substances: ['Psilocybin', 'MDMA', 'Ketamine', 'DMT', 'Ibogaine', '5-MeO-DMT'], focus: 'Mental Health Platform', website: 'https://atai.life' },
-    { name: 'MindMed', legalName: 'Mind Medicine (MindMed) Inc.', ticker: 'MNMD', type: 'Biotech', stage: 'Public', substances: ['LSD', 'MDMA', 'Psilocybin', 'DMT'], focus: 'Brain Health Medicines', website: 'https://mindmed.co' },
-    { name: 'Cybin Inc', legalName: 'Cybin Inc.', ticker: 'CYBN', type: 'Biotech', stage: 'Public', substances: ['Psilocybin', 'DMT'], focus: 'Depression and Anxiety', website: 'https://cybin.com' },
+    { name: 'MindMed', legalName: 'Definium Therapeutics, Inc.', ticker: 'DFTX', type: 'Biotech', stage: 'Public', substances: ['LSD', 'MDMA', 'Psilocybin', 'DMT'], focus: 'Brain Health Medicines', website: 'https://mindmed.co' },
+    { name: 'Cybin Inc', legalName: 'Cybin Inc.', ticker: 'HELP', type: 'Biotech', stage: 'Public', substances: ['Psilocybin', 'DMT'], focus: 'Depression and Anxiety', website: 'https://cybin.com' },
     { name: 'Numinus Wellness', ticker: 'NUMI', type: 'Healthcare', stage: 'Public', substances: ['Psilocybin', 'MDMA', 'Ketamine'], focus: 'Mental Health Clinics', website: 'https://numinus.com' },
     { name: 'Awakn Life Sciences', ticker: 'AWKN', type: 'Biotech', stage: 'Public', substances: ['Ketamine', 'MDMA'], focus: 'Addiction Treatment', website: 'https://awaknlifesciences.com' },
     { name: 'Enveric Biosciences', ticker: 'ENVB', type: 'Biotech', stage: 'Public', substances: ['Psilocybin'], focus: 'Cancer-Related Distress', website: 'https://enveric.com' },

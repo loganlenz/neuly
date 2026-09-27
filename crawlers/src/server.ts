@@ -26,11 +26,14 @@ import {
   FundingEvent,
   Grant,
   CareProvider,
+  NewsItem,
+  MarketQuote,
   EducationalResource,
   Substance,
   SUBSTANCES
 } from './models/types.js';
 import { deriveReadoutCalendar } from './core/readouts.js';
+import { LiveHub, buildFreshness } from './web/liveHub.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -38,6 +41,7 @@ const __dirname = dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 3001;
 const storage = await createStorage();
+const liveHub = new LiveHub(storage);
 
 // Middleware. credentials:true + reflected origin lets a statically hosted
 // frontend on another domain carry the session cookie to this API.
@@ -688,7 +692,7 @@ app.get('/api/care/:id', async (req: Request, res: Response) => {
  */
 app.get('/api/dashboard', async (_req: Request, res: Response) => {
   try {
-    const [trials, papers, companies, people, jobs, events, education, legislation, funding, grants, care] = await Promise.all([
+    const [trials, papers, companies, people, jobs, events, education, legislation, funding, grants, care, news, quotes] = await Promise.all([
       storage.load<ClinicalTrial>('clinical_trials'),
       storage.load<ResearchPaper>('research_papers'),
       storage.load<Company>('companies'),
@@ -699,7 +703,9 @@ app.get('/api/dashboard', async (_req: Request, res: Response) => {
       storage.load<LegislationBill>('legislation'),
       storage.load<FundingEvent>('funding_events'),
       storage.load<Grant>('grants'),
-      storage.load<CareProvider>('care_providers')
+      storage.load<CareProvider>('care_providers'),
+      storage.load<NewsItem>('news'),
+      storage.load<MarketQuote>('market_quotes')
     ]);
 
     // Get upcoming events
@@ -739,8 +745,11 @@ app.get('/api/dashboard', async (_req: Request, res: Response) => {
         fundingEvents: funding.length,
         grants: grants.length,
         careProviders: care.length,
-        licensedCareProviders: care.filter(c => c.verified).length
+        licensedCareProviders: care.filter(c => c.verified).length,
+        news: news.length,
+        publicCompaniesQuoted: quotes.length
       },
+      latestNews: [...news].sort((a, b) => b.publishedAt.localeCompare(a.publishedAt)).slice(0, 8),
       substancePapers,
       upcomingEvents,
       recentJobs,
@@ -765,7 +774,7 @@ app.get('/api/search', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Query must be at least 2 characters' });
     }
 
-    const [trials, papers, companies, people, jobs, events, legislation, grants, care] = await Promise.all([
+    const [trials, papers, companies, people, jobs, events, legislation, grants, care, news] = await Promise.all([
       storage.load<ClinicalTrial>('clinical_trials'),
       storage.load<ResearchPaper>('research_papers'),
       storage.load<Company>('companies'),
@@ -774,10 +783,15 @@ app.get('/api/search', async (req: Request, res: Response) => {
       storage.load<Event>('events'),
       storage.load<LegislationBill>('legislation'),
       storage.load<Grant>('grants'),
-      storage.load<CareProvider>('care_providers')
+      storage.load<CareProvider>('care_providers'),
+      storage.load<NewsItem>('news')
     ]);
 
     const results = {
+      news: news
+        .filter(n => n.title.toLowerCase().includes(query) || n.companies.some(c => c.toLowerCase().includes(query)))
+        .sort((a, b) => b.publishedAt.localeCompare(a.publishedAt))
+        .slice(0, 10),
       legislation: legislation.filter(l =>
         l.title.toLowerCase().includes(query) ||
         l.description?.toLowerCase().includes(query)
@@ -1033,6 +1047,121 @@ app.get('/api/changes', async (req: AuthedRequest, res: Response) => {
   }
 });
 
+/**
+ * Industry news: press coverage + material SEC filings, newest first.
+ * Query params: category ('News' | 'SEC Filing'), substance, company, search,
+ * since (ISO date), page, limit
+ */
+app.get('/api/news', async (req: Request, res: Response) => {
+  try {
+    const items = await storage.load<NewsItem>('news');
+    let filtered = items;
+
+    if (req.query.category) {
+      const category = (req.query.category as string).toLowerCase();
+      filtered = filtered.filter(n => n.category.toLowerCase() === category);
+    }
+    if (req.query.substance) {
+      const substance = (req.query.substance as string).toLowerCase();
+      filtered = filtered.filter(n => n.substances.some(s => s.toLowerCase() === substance));
+    }
+    if (req.query.company) {
+      const company = (req.query.company as string).toLowerCase();
+      filtered = filtered.filter(n => n.companies.some(c => c.toLowerCase().includes(company)));
+    }
+    if (req.query.search) {
+      const search = (req.query.search as string).toLowerCase();
+      filtered = filtered.filter(n =>
+        n.title.toLowerCase().includes(search) ||
+        n.publisher?.toLowerCase().includes(search) ||
+        n.companies.some(c => c.toLowerCase().includes(search))
+      );
+    }
+    if (req.query.since) {
+      const since = req.query.since as string;
+      filtered = filtered.filter(n => n.publishedAt >= since);
+    }
+
+    filtered.sort((a, b) => b.publishedAt.localeCompare(a.publishedAt));
+
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = Math.min(parseInt(req.query.limit as string) || 50, 500);
+    const start = (page - 1) * limit;
+
+    res.json({
+      data: filtered.slice(start, start + limit),
+      total: filtered.length,
+      page,
+      limit,
+      totalPages: Math.ceil(filtered.length / limit)
+    });
+  } catch (error) {
+    logger.error(`Error fetching news: ${error}`);
+    res.status(500).json({ error: 'Failed to fetch news' });
+  }
+});
+
+/**
+ * Market quotes for every publicly traded company tracked, plus an
+ * equal-weighted sector move. Query params: sort ('change' | 'ticker')
+ */
+app.get('/api/markets', async (req: Request, res: Response) => {
+  try {
+    const quotes = await storage.load<MarketQuote>('market_quotes');
+    const sorted = [...quotes].sort((a, b) =>
+      req.query.sort === 'ticker'
+        ? a.ticker.localeCompare(b.ticker)
+        : Math.abs(b.changePercent ?? 0) - Math.abs(a.changePercent ?? 0)
+    );
+    const withChange = quotes.filter(q => typeof q.changePercent === 'number');
+    const sectorChangePercent = withChange.length
+      ? Math.round((withChange.reduce((sum, q) => sum + q.changePercent!, 0) / withChange.length) * 100) / 100
+      : null;
+    const asOf = quotes.reduce<string | undefined>((latest, q) =>
+      q.marketTime && (!latest || q.marketTime > latest) ? q.marketTime : latest, undefined);
+
+    res.json({
+      data: sorted,
+      total: quotes.length,
+      summary: {
+        sectorChangePercent,
+        advancers: withChange.filter(q => q.changePercent! > 0).length,
+        decliners: withChange.filter(q => q.changePercent! < 0).length,
+        asOf
+      }
+    });
+  } catch (error) {
+    logger.error(`Error fetching market quotes: ${error}`);
+    res.status(500).json({ error: 'Failed to fetch market quotes' });
+  }
+});
+
+/**
+ * Per-dataset freshness: counts, last successful crawl, last error, cadence.
+ */
+app.get('/api/freshness', async (_req: Request, res: Response) => {
+  try {
+    const stats = await storage.getStats();
+    res.json({ serverTime: new Date().toISOString(), data: buildFreshness(stats) });
+  } catch (error) {
+    logger.error(`Error building freshness report: ${error}`);
+    res.status(500).json({ error: 'Failed to build freshness report' });
+  }
+});
+
+/**
+ * Live update stream (Server-Sent Events). Emits `hello` with dataset
+ * freshness on connect, then `changes` whenever a crawl lands new data.
+ */
+app.get('/api/live', async (_req: Request, res: Response) => {
+  try {
+    await liveHub.subscribe(res);
+  } catch (error) {
+    logger.error(`Error opening live stream: ${error}`);
+    if (!res.headersSent) res.status(500).json({ error: 'Failed to open live stream' });
+  }
+});
+
 // ============================================
 // ERROR HANDLING
 // ============================================
@@ -1081,6 +1210,10 @@ app.listen(PORT, () => {
   logger.info('  GET /api/funding         - SEC Form D funding events');
   logger.info('  GET /api/grants          - NIH research grants');
   logger.info('  GET /api/readouts        - Trial readout calendar');
+  logger.info('  GET /api/news            - Industry news + SEC filings');
+  logger.info('  GET /api/markets         - Public company stock quotes');
+  logger.info('  GET /api/freshness       - Per-dataset crawl freshness');
+  logger.info('  GET /api/live            - Live update stream (SSE)');
   logger.info(`Storage backend: ${storage.label}`);
   logger.info('='.repeat(50));
 });

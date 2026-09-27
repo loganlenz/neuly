@@ -61,6 +61,8 @@ Usage:
   npm run crawl:events           Crawl events and conferences
   npm run crawl:people           Crawl researcher profiles
   npm run crawl:care             Crawl licensed care providers
+  npm run crawl:news             Crawl industry news + SEC filings
+  npm run crawl:markets          Crawl stock quotes for public companies
   npm run schedule               Run the crawl scheduler (per-source cadence)
   npm run db:migrate             Apply the Postgres schema (DATABASE_URL)
 

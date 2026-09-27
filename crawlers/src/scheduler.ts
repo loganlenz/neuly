@@ -5,36 +5,7 @@ import { CrawlerOrchestrator, CrawlerName } from './orchestrator.js';
 import { runAlertDispatch } from './alerts/alerts.js';
 import { runNewsletter } from './newsletter/digest.js';
 import { logger } from './utils/logger.js';
-
-interface ScheduleEntry {
-  crawler: Exclude<CrawlerName, 'all'>;
-  /** cron expression; override with SCHEDULE_<CRAWLER> env vars */
-  cron: string;
-  description: string;
-}
-
-/**
- * Per-source crawl cadence. Matched to how fast each source actually
- * changes — filings and jobs move daily, the literature weekly.
- */
-const DEFAULT_SCHEDULE: ScheduleEntry[] = [
-  // Clinical trials move fastest — check twice daily so new registrations and
-  // status changes surface within hours, not a day.
-  { crawler: 'clinicaltrials', cron: '0 6,18 * * *', description: 'ClinicalTrials.gov — twice daily 06:00 & 18:00 UTC' },
-  { crawler: 'companies', cron: '0 7 * * 1-5', description: 'SEC EDGAR — weekdays 07:00 UTC' },
-  { crawler: 'jobs', cron: '30 7 * * *', description: 'ATS job boards — daily 07:30 UTC' },
-  { crawler: 'events', cron: '0 8 * * *', description: 'Events — daily 08:00 UTC' },
-  // Literature: PubMed twice a week (Mon & Thu) so new papers land promptly.
-  { crawler: 'pubmed', cron: '0 5 * * 1,4', description: 'PubMed — Mondays & Thursdays 05:00 UTC' },
-  { crawler: 'people', cron: '0 5 * * 2', description: 'People — Tuesdays 05:00 UTC' },
-  { crawler: 'legislation', cron: '0 9 * * *', description: 'Bills & Federal Register — daily 09:00 UTC' },
-  { crawler: 'funding', cron: '30 9 * * 1-5', description: 'SEC Form D filings — weekdays 09:30 UTC' },
-  { crawler: 'preprints', cron: '0 10 * * *', description: 'bioRxiv/medRxiv preprints — daily 10:00 UTC' },
-  { crawler: 'grants', cron: '0 4 * * 3', description: 'NIH RePORTER grants — Wednesdays 04:00 UTC' },
-  { crawler: 'care', cron: '0 11 * * 1', description: 'Licensed care providers — Mondays 11:00 UTC' },
-  // Refresh citation counts on stored papers twice a week (Wed & Sat).
-  { crawler: 'openalex', cron: '0 3 * * 3,6', description: 'OpenAlex citation refresh — Wednesdays & Saturdays 03:00 UTC' }
-];
+import { DEFAULT_SCHEDULE, Lane, ScheduleEntry } from './schedule.js';
 
 function scheduleFor(entry: ScheduleEntry): string {
   const override = process.env[`SCHEDULE_${entry.crawler.toUpperCase()}`];
@@ -55,15 +26,37 @@ async function main(): Promise<void> {
   logger.info(`Storage: ${orchestrator.storageLabel}`);
   logger.info('='.repeat(60));
 
-  // Serialize runs: crawlers share rate limits and the storage backend,
-  // so overlapping schedules queue instead of running concurrently.
-  let queue: Promise<void> = Promise.resolve();
+  // Two serialized lanes: crawlers within a lane share rate limits, so they
+  // queue instead of overlapping, while the live lane (news, quotes) is
+  // never stuck behind a multi-minute registry crawl. A crawler already
+  // waiting in its lane is not queued twice — at these cadences a slow run
+  // would otherwise pile up duplicate work.
+  const queues: Record<Lane, Promise<void>> = { live: Promise.resolve(), bulk: Promise.resolve() };
+  const pending = new Set<string>();
+  const laneOf = (crawler: Exclude<CrawlerName, 'all'>): Lane =>
+    DEFAULT_SCHEDULE.find(e => e.crawler === crawler)?.lane ?? 'bulk';
   const enqueue = (crawler: Exclude<CrawlerName, 'all'>) => {
-    queue = queue
-      .then(() => orchestrator.run(crawler))
+    if (pending.has(crawler)) {
+      logger.info(`[Scheduler] ${crawler} already queued — skipping this trigger`);
+      return;
+    }
+    pending.add(crawler);
+    const lane = laneOf(crawler);
+    queues[lane] = queues[lane]
+      .then(() => {
+        pending.delete(crawler);
+        return orchestrator.run(crawler);
+      })
       .catch(error => {
+        pending.delete(crawler);
         logger.error(`[Scheduler] ${crawler} run failed: ${error instanceof Error ? error.message : error}`);
       });
+  };
+  // Product jobs read the change log; they ride the bulk lane
+  const enqueueJob = (label: string, job: () => Promise<void>) => {
+    queues.bulk = queues.bulk
+      .then(job)
+      .catch(error => { logger.error(`[Scheduler] ${label} failed: ${error instanceof Error ? error.message : error}`); });
   };
 
   for (const entry of DEFAULT_SCHEDULE) {
@@ -72,35 +65,35 @@ async function main(): Promise<void> {
       logger.info(`[Scheduler] Triggering ${entry.crawler} (${expression})`);
       enqueue(entry.crawler);
     });
-    logger.info(`  ${entry.crawler.padEnd(16)} ${expression.padEnd(14)} ${entry.description}`);
+    logger.info(`  ${entry.crawler.padEnd(16)} ${expression.padEnd(18)} [${entry.lane}] ${entry.description}`);
   }
 
-  // Product jobs: alert emails daily after the morning crawls; the
-  // newsletter digest weekly on Mondays.
-  const alertsCron = process.env.SCHEDULE_ALERTS ?? '0 12 * * *';
+  // Product jobs: alert emails hourly (each subscription keeps its own
+  // cursor, so nothing is sent twice); the newsletter digest weekly.
+  const alertsCron = process.env.SCHEDULE_ALERTS ?? '5 * * * *';
   cron.schedule(alertsCron, () => {
-    queue = queue
-      .then(() => runAlertDispatch(orchestrator.storageBackend))
-      .then(({ sent }) => { logger.info(`[Scheduler] Alert dispatch done (${sent} emails)`); })
-      .catch(error => { logger.error(`[Scheduler] Alert dispatch failed: ${error instanceof Error ? error.message : error}`); });
+    enqueueJob('Alert dispatch', async () => {
+      const { sent } = await runAlertDispatch(orchestrator.storageBackend);
+      logger.info(`[Scheduler] Alert dispatch done (${sent} emails)`);
+    });
   });
-  logger.info(`  ${'alerts'.padEnd(16)} ${alertsCron.padEnd(14)} Alert emails — daily 12:00 UTC`);
+  logger.info(`  ${'alerts'.padEnd(16)} ${alertsCron.padEnd(18)} Alert emails — hourly`);
 
   const newsletterCron = process.env.SCHEDULE_NEWSLETTER ?? '0 13 * * 1';
   cron.schedule(newsletterCron, () => {
-    queue = queue
-      .then(() => runNewsletter(orchestrator.storageBackend))
-      .then(({ recipients, eventCount }) => { logger.info(`[Scheduler] Newsletter done (${eventCount} events, ${recipients} recipients)`); })
-      .catch(error => { logger.error(`[Scheduler] Newsletter failed: ${error instanceof Error ? error.message : error}`); });
+    enqueueJob('Newsletter', async () => {
+      const { recipients, eventCount } = await runNewsletter(orchestrator.storageBackend);
+      logger.info(`[Scheduler] Newsletter done (${eventCount} events, ${recipients} recipients)`);
+    });
   });
-  logger.info(`  ${'newsletter'.padEnd(16)} ${newsletterCron.padEnd(14)} Weekly digest — Mondays 13:00 UTC`);
+  logger.info(`  ${'newsletter'.padEnd(16)} ${newsletterCron.padEnd(18)} Weekly digest — Mondays 13:00 UTC`);
 
   if (process.env.RUN_ON_START === 'true') {
     // Order matters on a cold start: companies derive from trials, funding
     // and jobs derive from companies, people derive from trials/grants/papers.
     const bootOrder: Array<Exclude<CrawlerName, 'all'>> = [
       'clinicaltrials', 'pubmed', 'preprints', 'grants', 'companies', 'funding', 'jobs', 'people',
-      'events', 'legislation', 'care', 'openalex'
+      'events', 'legislation', 'care', 'news', 'markets', 'openalex'
     ];
     logger.info('[Scheduler] RUN_ON_START=true — running all crawlers now');
     for (const crawler of bootOrder) {
@@ -112,7 +105,7 @@ async function main(): Promise<void> {
 
   const shutdown = async () => {
     logger.info('[Scheduler] Shutting down...');
-    await queue.catch(() => undefined);
+    await Promise.all([queues.live, queues.bulk]).catch(() => undefined);
     await orchestrator.close();
     process.exit(0);
   };
