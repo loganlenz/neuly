@@ -312,3 +312,75 @@ CREATE TABLE IF NOT EXISTS audit_log (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_audit_log_created ON audit_log (created_at DESC);
+
+-- ============================================
+-- Marketplace: interest tracking, leads, partner claims, pay-per-lead
+-- ============================================
+
+-- Every signed-in look at a provider, study, company, ... (the activity log
+-- partners see in aggregate)
+CREATE TABLE IF NOT EXISTS entity_views (
+  id           BIGSERIAL PRIMARY KEY,
+  user_id      TEXT REFERENCES users(id) ON DELETE SET NULL,
+  entity_type  TEXT NOT NULL,
+  entity_id    TEXT NOT NULL,
+  entity_title TEXT,
+  viewed_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_entity_views_entity ON entity_views (entity_type, entity_id, viewed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_entity_views_user ON entity_views (user_id, viewed_at DESC);
+
+-- A user raising their hand: care inquiry or study-participation interest
+CREATE TABLE IF NOT EXISTS leads (
+  id           TEXT PRIMARY KEY,
+  user_id      TEXT REFERENCES users(id) ON DELETE SET NULL,
+  kind         TEXT NOT NULL CHECK (kind IN ('care_inquiry', 'study_interest')),
+  entity_type  TEXT NOT NULL,
+  entity_id    TEXT NOT NULL,
+  entity_title TEXT NOT NULL,
+  contact      JSONB NOT NULL,          -- name, email, phone, location
+  details      JSONB NOT NULL DEFAULT '{}'::jsonb,
+  status       TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new', 'contacted', 'closed', 'spam')),
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_leads_entity ON leads (entity_type, entity_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_leads_user ON leads (user_id, created_at DESC);
+
+-- An institution claiming a listing (care provider, study sponsor/site, company)
+CREATE TABLE IF NOT EXISTS entity_claims (
+  id               TEXT PRIMARY KEY,
+  user_id          TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  entity_type      TEXT NOT NULL,
+  entity_id        TEXT NOT NULL,
+  entity_title     TEXT NOT NULL,
+  organization     TEXT NOT NULL,
+  contact_email    TEXT NOT NULL,
+  message          TEXT,
+  status           TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+  lead_price_cents INTEGER,             -- override of the default per-lead price
+  notify_email     BOOLEAN NOT NULL DEFAULT true,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  reviewed_at      TIMESTAMPTZ,
+  reviewed_by      TEXT,
+  UNIQUE (user_id, entity_type, entity_id)
+);
+CREATE INDEX IF NOT EXISTS idx_entity_claims_entity ON entity_claims (entity_type, entity_id) WHERE status = 'approved';
+
+-- A partner unlocking a lead's contact details (Stripe one-off payment)
+CREATE TABLE IF NOT EXISTS lead_purchases (
+  id                 TEXT PRIMARY KEY,
+  lead_id            TEXT NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+  claim_id           TEXT NOT NULL REFERENCES entity_claims(id) ON DELETE CASCADE,
+  buyer_user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  amount_cents       INTEGER NOT NULL,
+  currency           TEXT NOT NULL DEFAULT 'usd',
+  stripe_session_id  TEXT,
+  status             TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'paid', 'comped', 'refunded')),
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  paid_at            TIMESTAMPTZ,
+  UNIQUE (lead_id, claim_id)
+);
+CREATE INDEX IF NOT EXISTS idx_lead_purchases_buyer ON lead_purchases (buyer_user_id, created_at DESC);
+
+-- Headshot provenance on people
+-- (stored inside the people JSONB payload: imageUrl, imageSource, imageAttribution)

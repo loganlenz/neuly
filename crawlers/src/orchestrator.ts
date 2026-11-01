@@ -9,6 +9,7 @@ import { FundingCrawler } from './crawlers/FundingCrawler.js';
 import { PreprintCrawler } from './crawlers/PreprintCrawler.js';
 import { GrantsCrawler } from './crawlers/GrantsCrawler.js';
 import { OpenAlexEnricher } from './enrichment/OpenAlexEnricher.js';
+import { HeadshotEnricher } from './enrichment/HeadshotEnricher.js';
 import { DiffEngine } from './core/DiffEngine.js';
 import { CrawlResult } from './core/BaseCrawler.js';
 import { DataType } from './utils/storage.js';
@@ -17,12 +18,12 @@ import { logger } from './utils/logger.js';
 import { CareCrawler } from './crawlers/CareCrawler.js';
 import { NewsCrawler } from './crawlers/NewsCrawler.js';
 import { MarketCrawler } from './crawlers/MarketCrawler.js';
-import { Company, ResearchPaper, ClinicalTrial, Grant, FundingEvent, CrawledData } from './models/types.js';
+import { Company, ResearchPaper, ClinicalTrial, Grant, FundingEvent, NewsItem, Person, CrawledData } from './models/types.js';
 
 export type CrawlerName =
   | 'clinicaltrials' | 'trials-recent' | 'pubmed' | 'companies' | 'jobs' | 'events' | 'people'
   | 'legislation' | 'funding' | 'preprints' | 'grants' | 'openalex' | 'care'
-  | 'news' | 'markets'
+  | 'news' | 'markets' | 'headshots'
   | 'all';
 
 interface CrawlerRun {
@@ -112,10 +113,16 @@ export class CrawlerOrchestrator {
       type: 'companies',
       fullSnapshot: false,
       run: async () => {
-        // Industry sponsors of stored trials become companies, alongside the
-        // curated list and SEC full-text discovery.
-        const trials = await this.storage.load<ClinicalTrial>('clinical_trials');
-        return new CompanyCrawler({ trials }).crawl();
+        // Industry sponsors and collaborators of stored trials, NIH awardee
+        // companies, Form D filers and companies in sector news become
+        // companies, alongside the curated list and SEC full-text discovery.
+        const [trials, grants, news, fundingEvents] = await Promise.all([
+          this.storage.load<ClinicalTrial>('clinical_trials'),
+          this.storage.load<Grant>('grants'),
+          this.storage.load<NewsItem>('news'),
+          this.storage.load<FundingEvent>('funding_events')
+        ]);
+        return new CompanyCrawler({ trials, grants, news, fundingEvents }).crawl();
       }
     });
 
@@ -212,6 +219,18 @@ export class CrawlerOrchestrator {
       run: () => new GrantsCrawler().crawl()
     });
 
+    // Enrichment: headshots for people without one (Wikidata / Commons).
+    this.crawlers.set('headshots', {
+      type: 'people',
+      fullSnapshot: false,
+      run: async () => {
+        const startTime = Date.now();
+        const people = await this.storage.load<Person>('people');
+        const updated = await new HeadshotEnricher().enrich(people);
+        return { success: true, data: updated, stats: { total: people.length, successful: updated.length, failed: 0, duration: Date.now() - startTime } };
+      }
+    });
+
     // Enrichment, not crawling: refreshes citation counts on stored papers.
     // Returns only changed papers so the upsert (and diff) stay minimal.
     this.crawlers.set('openalex', {
@@ -291,7 +310,7 @@ export class CrawlerOrchestrator {
     // people ← trials/grants/papers) run after their inputs.
     const allOrder = [
       'clinicaltrials', 'pubmed', 'preprints', 'grants', 'companies', 'funding', 'jobs', 'people',
-      'events', 'legislation', 'care', 'news', 'markets', 'openalex'
+      'events', 'legislation', 'care', 'news', 'markets', 'openalex', 'headshots'
     ];
     const toRun = crawlerName === 'all'
       ? allOrder.filter(name => this.crawlers.has(name)).map(name => [name, this.crawlers.get(name)!] as const)

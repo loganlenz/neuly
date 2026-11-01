@@ -9,7 +9,7 @@ const PLAN_IDS = Object.keys(PLANS) as Plan[];
 const ROLE_IDS: Role[] = ['user', 'admin'];
 export const TRIGGERABLE_CRAWLERS = [
   'clinicaltrials', 'trials-recent', 'pubmed', 'preprints', 'grants', 'companies', 'funding', 'jobs', 'people',
-  'events', 'legislation', 'care', 'news', 'markets', 'openalex'
+  'events', 'legislation', 'care', 'news', 'markets', 'openalex', 'headshots'
 ] as const;
 
 /**

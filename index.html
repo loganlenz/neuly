@@ -424,8 +424,13 @@
           }
         };
         run();
+        // Signed-out visitors receive short previews; reload everything
+        // once they sign in (and shrink back on sign-out).
+        const onAuth = () => { fetchData(); };
+        window.addEventListener('neuly:auth', onAuth);
         return () => {
           cancelled = true;
+          window.removeEventListener('neuly:auth', onAuth);
           if (source) source.close();
           if (pollTimer) clearInterval(pollTimer);
           if (refetchTimer) clearTimeout(refetchTimer);
@@ -729,7 +734,7 @@
         expectedCompletion: p.expectedCompletion || ''
       })),
       news: c.news || [],
-      team: (c.team || c.leadership || []).map(m => ({ name: m.name, role: m.role || m.title || '', personId: m.personId, source: m.source }))
+      team: (c.team || c.leadership || []).map(m => ({ name: m.name, role: m.role || m.title || '', personId: m.personId, source: m.source, imageUrl: m.imageUrl }))
     });
 
     const normalizePerson = (p) => ({
@@ -743,13 +748,17 @@
       expertise: p.expertise || [],
       papers: (p.publications && p.publications.count) != null ? p.publications.count : '—',
       citations: (p.publications && p.publications.citations) != null ? p.publications.citations.toLocaleString() + '+' : '—',
-      image: ROLE_EMOJIS[p.role] || '👤'
+      image: ROLE_EMOJIS[p.role] || '👤',
+      imageUrl: p.imageUrl,
+      imageSource: p.imageSource,
+      companyIds: p.companyIds || [],
+      affiliations: p.affiliations || []
     });
 
     const normalizeStudy = (t) => {
       const substance = (t.substances && t.substances[0]) || 'Multiple';
       const rawStatus = t.status || '';
-      const status = /recruit/i.test(rawStatus) ? 'Recruiting' : /complet/i.test(rawStatus) ? 'Completed' : 'Active';
+      const status = /recruit/i.test(rawStatus) ? 'Recruiting' : /complet/i.test(rawStatus) ? 'Completed' : /terminat|withdraw|suspend/i.test(rawStatus) ? 'Stopped' : 'Active';
       const locs = t.locations || [];
       const location = locs.length > 1 ? `${locs.length} sites` : locs.length === 1 ? fmtLocation(locs[0]) : '—';
       return {
@@ -763,6 +772,7 @@
         location,
         enrollment: typeof t.enrollment === 'number' ? t.enrollment : null,
         nctId: t.nctId,
+        rawStatus,
         url: t.url,
         studyType: t.studyType === 'OBSERVATIONAL' ? 'Observational' : t.studyType === 'EXPANDED_ACCESS' ? 'Expanded Access' : 'Interventional',
         hasResults: Boolean(t.hasResults),
@@ -832,6 +842,7 @@
     const MOBILE_MORE_ITEMS = [
       ['datasets', 'My Datasets', '🗂️'],
       ['account', 'Account & API', '⚙️'],
+      ['partners', 'Partner portal', '🤝'],
       ['pricing', 'Plans & Pricing', '💎'],
       ['care', 'Care', '🏥'],
       ['companies', 'Companies', '🏢'],
@@ -895,7 +906,7 @@
 
       const navItems = user
         ? [['dashboard', 'Dashboard'], ['live', '● Live'], ['research', 'Research'], ['companies', 'Companies'], ['people', 'People'], ['studies', 'Studies'], ['care', 'Care'], ['datasets', 'Datasets']]
-        : [['live', '● Live'], ['research', 'Research'], ['companies', 'Companies'], ['people', 'People'], ['studies', 'Studies'], ['care', 'Care'], ['pricing', 'Pricing']];
+        : [['live', '● Live'], ['research', 'Research'], ['companies', 'Companies'], ['people', 'People'], ['studies', 'Studies'], ['care', 'Care'], ['pricing', 'Pricing'], ['partners', 'For Partners']];
 
       // Mobile/tablet, signed in: iPhone-app chrome — slim top header with
       // the page context, tab buttons across the bottom.
@@ -944,7 +955,7 @@
                   {menuOpen && (
                     <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: '8px', width: '250px', maxHeight: '80vh', overflowY: 'auto', background: 'rgba(20,25,23,0.98)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', padding: '8px', animation: 'slideUp 0.2s' }}>
                       <div style={{ padding: '10px 16px 6px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><span style={{ fontSize: '12px', color: '#6b7370' }}>{user.email}</span><PlanBadge plan={user.plan} /></div>
-                      {[['account', '⚙️ Account & API keys'], ['datasets', '🗂️ My Datasets'], ['pricing', '💎 Plans & Pricing'], ...(user.role === 'admin' ? [['admin', '🛠️ Admin console']] : [])].map(([page, label]) => (
+                      {[['account', '⚙️ Account & API keys'], ['datasets', '🗂️ My Datasets'], ['partners', '🤝 Partner portal'], ['pricing', '💎 Plans & Pricing'], ...(user.role === 'admin' ? [['admin', '🛠️ Admin console']] : [])].map(([page, label]) => (
                         <div key={page} onClick={() => { setCurrentPage(page); setMenuOpen(false); }} style={{ padding: '10px 16px', borderRadius: '8px', cursor: 'pointer', fontSize: '14px', color: '#e8ebe9' }}>{label}</div>
                       ))}
                       <a href="/docs" style={{ display: 'block', padding: '10px 16px', borderRadius: '8px', cursor: 'pointer', fontSize: '14px', color: '#e8ebe9', textDecoration: 'none' }}>📘 API Documentation</a>
@@ -1191,7 +1202,7 @@
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '24px', marginBottom: '48px' }}>
               {featuredPeople.map((person, i) => (
                 <div key={i} style={{ ...sharedStyles.card, textAlign: 'center' }}>
-                  <div style={{ width: '80px', height: '80px', borderRadius: '50%', background: 'linear-gradient(135deg, rgba(125,211,192,0.2), rgba(168,197,226,0.2))', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '36px', margin: '0 auto 16px' }}>{person.image}</div>
+                  <Avatar name={person.name} imageUrl={person.imageUrl} size={80} style={{ margin: '0 auto 16px' }} />
                   <h3 style={{ fontSize: '18px', fontWeight: 600, color: '#fff', marginBottom: '4px' }}>{person.name}</h3>
                   <p style={{ fontSize: '14px', color: '#7dd3c0', marginBottom: '4px' }}>{person.role}</p>
                   <p style={{ fontSize: '13px', color: '#6b7370' }}>{person.org}</p>
@@ -1239,6 +1250,7 @@
           <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', flexWrap: 'wrap' }}>
             <button onClick={() => openAuth('signup')} style={{ ...sharedStyles.button, padding: '20px 48px', fontSize: '16px' }}>Get Started Free</button>
             <button onClick={() => { setCurrentPage && setCurrentPage('pricing'); window.scrollTo(0, 0); }} style={{ ...sharedStyles.buttonOutline, padding: '20px 40px', fontSize: '16px' }}>See plans & API</button>
+            <button onClick={() => { setCurrentPage && setCurrentPage('partners'); window.scrollTo(0, 0); }} style={{ ...sharedStyles.buttonOutline, padding: '20px 40px', fontSize: '16px' }}>For clinics & study teams</button>
           </div>
         </div>
       </section>
@@ -1686,7 +1698,7 @@
                   {filteredPeople.map(person => (
                     <div key={person.id} style={{ ...sharedStyles.card }}>
                       <div style={{ display: 'flex', alignItems: 'flex-start', gap: '16px', marginBottom: '16px' }}>
-                        <div style={{ width: '64px', height: '64px', borderRadius: '50%', background: 'linear-gradient(135deg, rgba(125,211,192,0.2), rgba(168,197,226,0.2))', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '28px', flexShrink: 0 }}>{person.image}</div>
+                        <Avatar name={person.name} imageUrl={person.imageUrl} size={64} />
                         <div style={{ flex: 1 }}>
                           <h3 style={{ fontSize: '18px', fontWeight: 600, color: '#fff', marginBottom: '4px' }}>{person.name}</h3>
                           <p style={{ fontSize: '14px', color: '#7dd3c0', marginBottom: '2px' }}>{person.title}</p>
@@ -1732,7 +1744,7 @@
                     const person = personById.get(String(item.entityId));
                     return (
                       <div key={item.id} style={{ ...sharedStyles.card, display: 'flex', alignItems: 'center', gap: '20px' }}>
-                        <div style={{ width: '56px', height: '56px', borderRadius: '50%', background: 'linear-gradient(135deg, rgba(125,211,192,0.2), rgba(168,197,226,0.2))', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '24px' }}>{person ? person.image : '👤'}</div>
+                        <Avatar name={person ? person.name : item.entityTitle} imageUrl={person ? person.imageUrl : undefined} size={56} />
                         <div style={{ flex: 1 }}>
                           <h3 style={{ fontSize: '17px', fontWeight: 600, color: '#fff', marginBottom: '4px' }}>{item.entityTitle}</h3>
                           <span style={{ fontSize: '13px', color: '#6b7370' }}>{person ? `${person.role} • ${person.org}` : `Saved ${timeAgo(item.createdAt)}`}</span>
@@ -1760,7 +1772,7 @@
                     const person = personById.get(String(item.entityId));
                     return (
                       <div key={item.id} style={{ ...sharedStyles.card, display: 'flex', alignItems: 'center', gap: '20px' }}>
-                        <div style={{ width: '56px', height: '56px', borderRadius: '50%', background: 'linear-gradient(135deg, rgba(125,211,192,0.2), rgba(168,197,226,0.2))', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '24px' }}>{person ? person.image : '👤'}</div>
+                        <Avatar name={person ? person.name : item.entityTitle} imageUrl={person ? person.imageUrl : undefined} size={56} />
                         <div style={{ flex: 1 }}>
                           <h3 style={{ fontSize: '17px', fontWeight: 600, color: '#fff', marginBottom: '4px' }}>{item.entityTitle}</h3>
                           <span style={{ fontSize: '13px', color: '#6b7370' }}>{person ? `${person.role} • ${person.org}` : `Following since ${timeAgo(item.createdAt)}`}</span>
@@ -1781,6 +1793,7 @@
     // COMPANY PROFILE PAGE
     const CompanyProfilePage = ({ company, setCurrentPage, setSelectedPerson }) => {
       const [activeTab, setActiveTab] = useState('overview');
+      useEffect(() => { if (company) trackView('companies', company.id, company.name); }, [company && company.id]);
 
       if (!company) {
         setCurrentPage('companies');
@@ -1990,7 +2003,7 @@
                             <span style={{ padding: '3px 8px', fontSize: '11px', fontWeight: 600, background: item.type === 'Clinical' ? 'rgba(125,211,192,0.1)' : item.type === 'Regulatory' ? 'rgba(212,165,201,0.1)' : 'rgba(240,183,117,0.1)', color: item.type === 'Clinical' ? '#7dd3c0' : item.type === 'Regulatory' ? '#d4a5c9' : '#f0b775', borderRadius: '4px' }}>{item.type}</span>
                           </div>
                         </div>
-                        {item.url && <button onClick={() => window.open(item.url, '_blank')} style={{ background: 'transparent', border: 'none', color: '#7dd3c0', fontSize: '14px', cursor: 'pointer' }}>Read →</button>}
+                        {item.url && <button onClick={() => openExternal(item.url)} style={{ background: 'transparent', border: 'none', color: '#7dd3c0', fontSize: '14px', cursor: 'pointer' }}>Read →</button>}
                       </div>
                     ))}
                   </div>
@@ -2011,7 +2024,7 @@
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '20px' }}>
                     {company.team.map((member, i) => (
                       <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '16px', padding: '20px', background: 'rgba(255,255,255,0.02)', borderRadius: '14px', cursor: 'pointer' }}>
-                        <div style={{ width: '56px', height: '56px', borderRadius: '50%', background: 'linear-gradient(135deg, rgba(125,211,192,0.2), rgba(168,197,226,0.2))', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '24px' }}>👤</div>
+                        <Avatar name={member.name} imageUrl={member.imageUrl} size={56} />
                         <div style={{ flex: 1 }}>
                           <div style={{ fontSize: '16px', fontWeight: 600, color: '#fff', marginBottom: '4px' }}>{member.name}</div>
                           <div style={{ fontSize: '13px', color: '#7dd3c0' }}>{member.role}</div>
@@ -2039,6 +2052,7 @@
     const PersonProfilePage = ({ person, setCurrentPage, setSelectedCompany }) => {
       const [activeTab, setActiveTab] = useState('overview');
       const apiData = useApiData();
+      useEffect(() => { if (person) trackView('people', person.id, person.name); }, [person && person.id]);
 
       if (!person) {
         setCurrentPage('people');
@@ -2068,7 +2082,7 @@
 
             {/* Person Header */}
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: '32px', marginBottom: '48px' }}>
-              <div style={{ width: '140px', height: '140px', borderRadius: '50%', background: 'linear-gradient(135deg, rgba(125,211,192,0.2), rgba(168,197,226,0.2))', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '64px', flexShrink: 0 }}>{person.image}</div>
+              <Avatar name={person.name} imageUrl={person.imageUrl} size={140} />
               <div style={{ flex: 1 }}>
                 <h1 style={{ fontFamily: '"Fraunces", serif', fontSize: '42px', fontWeight: 600, color: '#fff', marginBottom: '8px' }}>{person.name}</h1>
                 <div style={{ fontSize: '18px', color: '#7dd3c0', marginBottom: '8px' }}>{person.title}</div>
@@ -2184,7 +2198,7 @@
                           {pub.citations > 0 && <span style={{ padding: '3px 8px', fontSize: '11px', fontWeight: 600, background: 'rgba(240,183,117,0.1)', color: '#f0b775', borderRadius: '4px' }}>{pub.citations} citations</span>}
                         </div>
                       </div>
-                      {pub.url && <button onClick={() => window.open(pub.url, '_blank')} style={{ background: 'transparent', border: 'none', color: '#7dd3c0', fontSize: '14px', cursor: 'pointer' }}>View →</button>}
+                      {pub.url && <button onClick={() => openExternal(pub.url)} style={{ background: 'transparent', border: 'none', color: '#7dd3c0', fontSize: '14px', cursor: 'pointer' }}>View →</button>}
                     </div>
                   ))}
                 </div>
@@ -2705,7 +2719,7 @@
               <h3 style={{ fontSize: '18px', fontWeight: 600, color: '#fff', marginBottom: '8px', lineHeight: 1.3 }}>{course.title}</h3>
               <p style={{ fontSize: '13px', color: '#6b7370', marginBottom: '16px', lineHeight: 1.5, flex: 1 }}>{course.description}</p>
               <div style={{ display: 'flex', gap: '16px', marginBottom: '16px', fontSize: '12px', color: '#6b7370' }}><span>🕐 {course.duration}</span><span>🏷️ {course.category}</span></div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '16px' }}><span style={{ fontSize: '22px', fontWeight: 700, color: course.price === 'Free' ? '#7dd3c0' : '#fff' }}>{course.price}</span><button onClick={() => course.url && course.url !== '#' && window.open(course.url, '_blank')} style={{ ...sharedStyles.button, padding: '10px 24px', fontSize: '14px' }}>View Program</button></div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '16px' }}><span style={{ fontSize: '22px', fontWeight: 700, color: course.price === 'Free' ? '#7dd3c0' : '#fff' }}>{course.price}</span><button onClick={() => course.url && course.url !== '#' && openExternal(course.url)} style={{ ...sharedStyles.button, padding: '10px 24px', fontSize: '14px' }}>View Program</button></div>
             </div>))}</div>
             {filtered.length === 0 && <div style={{ textAlign: 'center', padding: '60px', color: '#6b7370' }}><p style={{ fontSize: '18px' }}>No courses match your filters</p></div>}
           </div>
@@ -2842,7 +2856,8 @@
                   </div>
                   <div style={{ display: 'flex', gap: '10px', flexShrink: 0, marginLeft: '20px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                     <AddToDatasetButton entityType="clinical_trials" entityId={study.id} entityTitle={study.title} compact style={{ padding: '12px 16px', fontSize: '13px' }} />
-                    <button onClick={() => { const url = study.url || (study.nctId ? `https://clinicaltrials.gov/study/${study.nctId}` : null); if (url) window.open(url, '_blank'); }} style={{ ...sharedStyles.button, padding: '12px 24px' }}>{study.status === 'Recruiting' ? 'View & Enroll' : 'View Study'}</button>
+                    {['Recruiting', 'Not Yet Recruiting', 'Enrolling by Invitation'].includes(study.rawStatus) && <LeadButton kind="study_interest" entityType="clinical_trials" entityId={study.id} entityTitle={`${study.nctId} — ${study.title}`} label="I'm interested" style={{ padding: '12px 20px' }} />}
+                    <button onClick={() => { trackView('clinical_trials', study.id, study.title); window.location.href = entityPath('clinical_trials', study); }} style={{ ...sharedStyles.buttonOutline, padding: '12px 20px' }}>Details</button>
                   </div>
                 </div>
               ))}
@@ -2932,7 +2947,7 @@
                       <span style={{ padding: '6px 12px', fontSize: '12px', background: 'rgba(240,183,117,0.15)', color: '#f0b775', borderRadius: '6px' }}>💰 {job.salary}</span>
                     </div>
                   </div>
-                  <button onClick={() => job.url && window.open(job.url, '_blank')} disabled={!job.url} style={{ ...sharedStyles.button, padding: '12px 24px', flexShrink: 0, opacity: job.url ? 1 : 0.5, cursor: job.url ? 'pointer' : 'not-allowed' }}>Apply</button>
+                  <button onClick={() => job.url && openExternal(job.url)} disabled={!job.url} style={{ ...sharedStyles.button, padding: '12px 24px', flexShrink: 0, opacity: job.url ? 1 : 0.5, cursor: job.url ? 'pointer' : 'not-allowed' }}>Apply</button>
                 </div>
               ))}
             </div>
@@ -3024,7 +3039,7 @@
                           </div>
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                             <span style={{ fontSize: '16px', fontWeight: 600, color: '#7dd3c0' }}>{event.price}</span>
-                            <button onClick={() => event.website && window.open(event.website, '_blank')} disabled={!event.website} style={{ ...sharedStyles.button, padding: '10px 20px', opacity: event.website ? 1 : 0.5, cursor: event.website ? 'pointer' : 'not-allowed' }}>Register</button>
+                            <button onClick={() => event.website && openExternal(event.website)} disabled={!event.website} style={{ ...sharedStyles.button, padding: '10px 20px', opacity: event.website ? 1 : 0.5, cursor: event.website ? 'pointer' : 'not-allowed' }}>Register</button>
                           </div>
                         </div>
                       </div>
@@ -3055,7 +3070,7 @@
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <span style={{ fontSize: '14px', fontWeight: 600, color: '#7dd3c0' }}>{event.price}</span>
-                    <button onClick={() => event.website && window.open(event.website, '_blank')} disabled={!event.website} style={{ ...sharedStyles.buttonOutline, padding: '8px 16px', fontSize: '13px', opacity: event.website ? 1 : 0.5, cursor: event.website ? 'pointer' : 'not-allowed' }}>Details</button>
+                    <button onClick={() => event.website && openExternal(event.website)} disabled={!event.website} style={{ ...sharedStyles.buttonOutline, padding: '8px 16px', fontSize: '13px', opacity: event.website ? 1 : 0.5, cursor: event.website ? 'pointer' : 'not-allowed' }}>Details</button>
                   </div>
                 </div>
               ))}
@@ -3168,14 +3183,14 @@
       </div>
     );
 
-    const openUrl = (url) => { if (url) window.open(url, '_blank', 'noopener'); };
+    const openUrl = (url) => openExternal(url);
 
     const rowStyle = { ...sharedStyles.card, padding: '18px 22px', display: 'flex', gap: '16px', alignItems: 'flex-start', cursor: 'pointer' };
 
     const NewsList = ({ items, compact }) => (
       <div style={{ display: 'flex', flexDirection: 'column', gap: compact ? '10px' : '12px' }}>
         {items.map(n => (
-          <div key={n.id} onClick={() => openUrl(n.url)} style={rowStyle}>
+          <div key={n.id} onClick={() => goToEntity('news', n)} style={rowStyle} title="Open on Neuly">
             <div style={{ fontSize: '22px', lineHeight: 1 }}>{n.category === 'SEC Filing' ? '📑' : '📰'}</div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: compact ? '14px' : '15px', fontWeight: 600, color: '#fff', lineHeight: 1.4, marginBottom: '6px' }}>{n.title}</div>
@@ -3210,7 +3225,7 @@
         {events.map(e => {
           const meta = LIVE_ENTITY_META[e.entityType] || { icon: '•', label: e.entityType, color: '#a0a8a4' };
           return (
-            <div key={e.id} style={{ ...sharedStyles.card, padding: '14px 18px', display: 'flex', gap: '14px', alignItems: 'center' }}>
+            <div key={e.id} onClick={() => goToEntity(e.entityType, e)} style={{ ...sharedStyles.card, padding: '14px 18px', display: 'flex', gap: '14px', alignItems: 'center', cursor: entityPath(e.entityType, e) ? 'pointer' : 'default' }} title="Open on Neuly">
               <div style={{ width: '38px', height: '38px', borderRadius: '10px', background: `${meta.color}1a`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px', flexShrink: 0 }}>{meta.icon}</div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: '14px', color: '#e8ebe9', lineHeight: 1.45, overflow: 'hidden', textOverflow: 'ellipsis' }}>{e.summary}</div>
@@ -3339,7 +3354,7 @@
           {shown.length === 0 ? <EmptyState icon="🏛️" title="No bills or rules yet" body="State bills (LegiScan) and federal DEA/FDA/HHS actions (Federal Register) are checked hourly." /> : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
               {shown.map(b => (
-                <div key={b.id} onClick={() => openUrl(b.url)} style={rowStyle}>
+                <div key={b.id} onClick={() => goToEntity('legislation', b)} style={rowStyle}>
                   <div style={{ fontSize: '22px' }}>🏛️</div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '6px' }}>
@@ -3367,7 +3382,7 @@
       return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
           {rounds.map(f => (
-            <div key={f.id} onClick={() => openUrl(f.url)} style={rowStyle}>
+            <div key={f.id} onClick={() => goToEntity('funding_events', f)} style={rowStyle}>
               <div style={{ fontSize: '22px' }}>💰</div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: '15px', fontWeight: 600, color: '#fff' }}>{f.companyName}</div>
@@ -3391,7 +3406,7 @@
       return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
           {grants.map(g => (
-            <div key={g.id} onClick={() => openUrl(g.url)} style={rowStyle}>
+            <div key={g.id} onClick={() => goToEntity('grants', g)} style={rowStyle}>
               <div style={{ fontSize: '22px' }}>🎯</div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: '15px', fontWeight: 600, color: '#fff', lineHeight: 1.4 }}>{g.title}</div>
@@ -3412,7 +3427,7 @@
       return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
           {readouts.map(r => (
-            <div key={r.trialId || r.nctId} onClick={() => openUrl(r.url || (r.nctId ? `https://clinicaltrials.gov/study/${r.nctId}` : null))} style={rowStyle}>
+            <div key={r.trialId || r.nctId} onClick={() => goToEntity('clinical_trials', r)} style={rowStyle}>
               <div style={{ minWidth: '96px', textAlign: 'center' }}>
                 <div style={{ fontFamily: '"Fraunces", serif', fontSize: '17px', fontWeight: 600, color: '#f0b775' }}>{r.expectedReadoutStart ? new Date(r.expectedReadoutStart).toLocaleDateString('en-US', { month: 'short', year: 'numeric' }) : '—'}</div>
                 <div style={{ fontSize: '11px', color: '#6b7370' }}>{r.expectedReadoutEnd ? `to ${new Date(r.expectedReadoutEnd).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}` : ''}</div>
@@ -3594,7 +3609,7 @@
         <div style={{ maxWidth: '1280px', margin: '0 auto', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '24px' }}>
           <NeulyLogo height={18} />
           <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', fontSize: '13px' }}>
-            {[['pricing', 'Pricing'], ['datasets', 'Datasets'], ['live', 'Industry Live'], ['account', 'Account']].map(([page, label]) => (
+            {[['pricing', 'Pricing'], ['partners', 'For clinics & study teams'], ['datasets', 'Datasets'], ['live', 'Industry Live'], ['account', 'Account']].map(([page, label]) => (
               <span key={page} onClick={() => { setCurrentPage && setCurrentPage(page); window.scrollTo(0, 0); }} style={{ color: '#a0a8a4', cursor: 'pointer' }}>{label}</span>
             ))}
             <a href="/docs" style={{ color: '#a0a8a4', textDecoration: 'none' }}>API Docs</a>
@@ -3617,8 +3632,10 @@
       home: '/', dashboard: '/dashboard', live: '/live', research: '/research', companies: '/companies',
       people: '/people', education: '/education', care: '/care', studies: '/studies', jobs: '/jobs',
       events: '/events', pricing: '/pricing', account: '/account', datasets: '/datasets', admin: '/admin',
-      'reset-password': '/reset-password'
+      'reset-password': '/reset-password', partners: '/partners'
     };
+    // Pages a signed-out visitor may see; everything else needs an account.
+    const PUBLIC_PAGES = new Set(['home', 'pricing', 'reset-password', 'shared-dataset', 'partners']);
     const pageFromLocation = () => {
       const path = window.location.pathname.replace(/\/+$/, '') || '/';
       if (path.startsWith('/datasets/shared/')) return { page: 'shared-dataset', slug: decodeURIComponent(path.split('/')[3] || '') };
@@ -3921,7 +3938,7 @@
                 <button key={key} onClick={() => setTab(key)} style={{ flexShrink: 0, padding: '12px 18px', background: 'transparent', border: 'none', borderBottom: tab === key ? '2px solid #7dd3c0' : '2px solid transparent', color: tab === key ? '#7dd3c0' : '#a0a8a4', fontSize: '14px', fontWeight: 600, cursor: 'pointer', marginBottom: '-1px' }}>{label}</button>
               ))}
             </div>
-            {tab === 'profile' && <ProfileTab user={user} setUser={setUser} />}
+            {tab === 'profile' && <ProfileTabWithRequests user={user} setUser={setUser} />}
             {tab === 'billing' && <BillingTab user={user} setCurrentPage={setCurrentPage} />}
             {tab === 'api' && <ApiKeysTab user={user} setCurrentPage={setCurrentPage} />}
             {tab === 'alerts' && <AlertsTab user={user} setCurrentPage={setCurrentPage} />}
@@ -3958,6 +3975,7 @@
         </form>
       );
     };
+    const ProfileTabWithRequests = ({ user, setUser }) => (<><ProfileTab user={user} setUser={setUser} /><MyRequests /></>);
 
     const BillingTab = ({ user, setCurrentPage }) => {
       const { data } = useFetch('/billing/plans');
@@ -4479,6 +4497,7 @@
       const setRole = async (id, role) => { try { await api.send('PATCH', `/admin/users/${id}`, { role }); users.reload(); notify('Role updated'); } catch (err) { notify(err.message, 'error'); } };
       const runCrawler = async (crawler) => { try { const res = await api.post('/admin/crawl', { crawler }); notify(res.message); crawls.reload(); } catch (err) { notify(err.message, 'error'); } };
 
+      const [adminTab, setAdminTab] = useState('platform');
       const o = overview.data;
       const freshnessReport = useFetch('/freshness');
       const freshness = (freshnessReport.data && freshnessReport.data.data) || [];
@@ -4486,9 +4505,15 @@
         <div style={pageShell(isMobile)}>
           <div style={pageInner(isMobile)}>
             <h1 style={{ fontFamily: '"Fraunces", serif', fontSize: isMobile ? '30px' : '38px', fontWeight: 600, color: '#fff', marginBottom: '6px' }}>Admin console</h1>
-            <p style={{ fontSize: '14px', color: '#6b7370', marginBottom: '28px' }}>Users, plans, API usage and crawler control. Every action here is written to the audit log.</p>
+            <p style={{ fontSize: '14px', color: '#6b7370', marginBottom: '20px' }}>Users, plans, API usage, crawler control and the marketplace. Every action here is written to the audit log.</p>
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '24px', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+              {[['platform', 'Platform'], ['marketplace', 'Partners & leads']].map(([key, label]) => (
+                <button key={key} onClick={() => setAdminTab(key)} style={{ padding: '12px 18px', background: 'transparent', border: 'none', borderBottom: adminTab === key ? '2px solid #7dd3c0' : '2px solid transparent', color: adminTab === key ? '#7dd3c0' : '#a0a8a4', fontSize: '14px', fontWeight: 600, cursor: 'pointer', marginBottom: '-1px' }}>{label}</button>
+              ))}
+            </div>
+            {adminTab === 'marketplace' && <AdminMarketplaceTab />}
 
-            {o && (
+            {adminTab === 'platform' && o && (
               <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(6, 1fr)', gap: '12px', marginBottom: '28px' }}>
                 {[
                   ['Users', o.users.total], ['New (7d)', o.users.last7d], ['Pro / Ent', `${o.users.byPlan.pro} / ${o.users.byPlan.enterprise}`],
@@ -4499,7 +4524,7 @@
               </div>
             )}
 
-            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1.3fr 1fr', gap: '24px' }}>
+            {adminTab === 'platform' && <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1.3fr 1fr', gap: '24px' }}>
               <div style={sharedStyles.card}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', marginBottom: '14px', flexWrap: 'wrap' }}>
                   <h3 style={{ fontSize: '18px', color: '#fff' }}>Users {users.data ? `(${users.data.total})` : ''}</h3>
@@ -4551,8 +4576,506 @@
                   ))}
                 </div>
               </div>
+            </div>}
+          </div>
+        </div>
+      );
+    };
+
+    // ============================================================
+    // Phase two: entity links, external-link interstitial, avatars,
+    // lead capture, partner portal
+    // ============================================================
+
+    // Mirrors entityPath() in crawlers/src/web/seoPages.ts — every record
+    // has its own server-rendered page on Neuly.
+    const slugifyJs = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    const entityPath = (type, item) => {
+      const id = encodeURIComponent(item.entityId || item.id || '');
+      switch (type) {
+        case 'clinical_trials': return `/trials/${encodeURIComponent(item.nctId || item.entityId || item.id)}`;
+        case 'companies': return `/company-profiles/${slugifyJs(item.name || item.entityTitle || item.id)}`;
+        case 'market_quotes': return `/company-profiles/${slugifyJs(item.companyName || (item.entityTitle || '').replace(/^.*\(|\)$/g, '') || item.id)}`;
+        case 'research_papers': return `/papers/${id}`;
+        case 'people': return `/people/${id}`;
+        case 'jobs': return `/jobs/${id}`;
+        case 'events': return `/events/${id}`;
+        case 'legislation': return `/bills/${id}`;
+        case 'funding_events': return `/funding/${id}`;
+        case 'grants': return `/grants/${id}`;
+        case 'care_providers': return `/care/${id}`;
+        case 'news': return `/news/${id}`;
+        default: return null;
+      }
+    };
+    const goToEntity = (type, item) => { const p = entityPath(type, item); if (p) window.location.href = p; };
+
+    // ---- External-link interstitial: every outbound link passes through here
+    const openExternal = (url) => {
+      if (!url) return;
+      let target = String(url);
+      if (!/^https?:\/\//i.test(target)) target = `https://${target.replace(/^\/+/, '')}`;
+      try { if (new URL(target).host === window.location.host) { window.location.href = target; return; } } catch (e) { return; }
+      window.dispatchEvent(new CustomEvent('neuly:external', { detail: { url: target } }));
+    };
+    const ExternalLinkModal = () => {
+      const [url, setUrl] = useState(null);
+      const { user, requireAuth } = useContext(AuthActionsContext);
+      useEffect(() => {
+        const onOpen = (e) => setUrl(e.detail.url);
+        // Catch plain anchors too (care websites, paper links, …)
+        const onClick = (e) => {
+          const a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+          if (!a) return;
+          const href = a.getAttribute('href') || '';
+          if (!/^https?:\/\//i.test(href)) return;
+          try { if (new URL(href).host === window.location.host) return; } catch (err) { return; }
+          e.preventDefault();
+          setUrl(href);
+        };
+        window.addEventListener('neuly:external', onOpen);
+        document.addEventListener('click', onClick, true);
+        return () => { window.removeEventListener('neuly:external', onOpen); document.removeEventListener('click', onClick, true); };
+      }, []);
+      if (!url) return null;
+      let host = url;
+      try { host = new URL(url).host.replace(/^www\./, ''); } catch (e) { /* keep */ }
+      return (
+        <div onClick={() => setUrl(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.78)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 350, padding: '20px' }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ background: 'linear-gradient(180deg, #1a1f1d 0%, #141918 100%)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '20px', padding: '28px', width: '460px', maxWidth: '100%', animation: 'slideUp 0.2s' }}>
+            <div style={{ fontSize: '12px', color: '#f0b775', fontWeight: 700, letterSpacing: '0.5px', marginBottom: '8px' }}>LEAVING NEULY</div>
+            <h3 style={{ fontFamily: '"Fraunces", serif', fontSize: '24px', color: '#fff', marginBottom: '8px' }}>You're about to visit {host}</h3>
+            <p style={{ fontSize: '14px', color: '#a0a8a4', lineHeight: 1.6, marginBottom: '6px' }}>This link leaves Neuly.com for an external site we don't control. Neuly does not endorse, verify or take responsibility for its content.</p>
+            <p style={{ fontSize: '12px', color: '#6b7370', wordBreak: 'break-all', marginBottom: '20px' }}>{url}</p>
+            <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+              {user
+                ? <a href={url} target="_blank" rel="noopener noreferrer" onClick={(e) => { e.stopPropagation(); window.open(url, '_blank', 'noopener'); e.preventDefault(); setUrl(null); }} style={{ ...sharedStyles.button, padding: '12px 24px', textDecoration: 'none', display: 'inline-block' }}>Continue to {host}</a>
+                : <button onClick={() => { setUrl(null); requireAuth('signup'); }} style={{ ...sharedStyles.button, padding: '12px 24px' }}>Create a free account to continue</button>}
+              <button onClick={() => setUrl(null)} style={{ ...sharedStyles.buttonOutline, padding: '12px 24px' }}>Stay on Neuly</button>
             </div>
           </div>
+        </div>
+      );
+    };
+
+    // ---- Avatars: real headshot when we have one, deterministic initials otherwise
+    const AVATAR_GRADIENTS = ['linear-gradient(135deg, #7dd3c0, #a8c5e2)', 'linear-gradient(135deg, #f0b775, #d4a5c9)', 'linear-gradient(135deg, #98d4a0, #7dd3c0)', 'linear-gradient(135deg, #c084fc, #a8c5e2)', 'linear-gradient(135deg, #e8c898, #f0b775)'];
+    const Avatar = ({ name, imageUrl, size = 56, style }) => {
+      const [broken, setBroken] = useState(false);
+      const initials = String(name || '?').replace(/^(dr|prof|professor)\.?\s+/i, '').split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0].toUpperCase()).join('') || '?';
+      let h = 3; for (const ch of String(name || '')) h = (h * 31 + ch.charCodeAt(0)) | 0;
+      const base = { width: `${size}px`, height: `${size}px`, borderRadius: '50%', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', ...style };
+      if (imageUrl && !broken) return <img src={imageUrl} alt={name} loading="lazy" onError={() => setBroken(true)} style={{ ...base, objectFit: 'cover', border: '2px solid rgba(255,255,255,0.1)' }} />;
+      return <div style={{ ...base, background: AVATAR_GRADIENTS[Math.abs(h) % AVATAR_GRADIENTS.length], color: '#0a0f0d', fontWeight: 700, fontSize: `${Math.round(size * 0.36)}px`, letterSpacing: '0.5px' }}>{initials}</div>;
+    };
+
+    // ---- Interest tracking (signed-in only; everything is behind an account)
+    const trackView = (entityType, entityId, entityTitle) => {
+      api.post('/track/view', { entityType, entityId: String(entityId), entityTitle }).catch(() => undefined);
+    };
+
+    // ---- Lead capture: "Request information" (care) / "I'm interested" (study)
+    const LeadModal = ({ kind, entityType, entityId, entityTitle, onClose, user }) => {
+      const isStudy = kind === 'study_interest';
+      const [form, setForm] = useState({ name: (user && user.name) || '', email: (user && user.email) || '', phone: '', location: '', condition: '', interest: '', ageRange: '', preferredContact: 'email', message: '', availability: '' });
+      const [consent, setConsent] = useState(false);
+      const [busy, setBusy] = useState(false);
+      const [done, setDone] = useState(null);
+      const [error, setError] = useState(null);
+      const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
+      const submit = async (e) => {
+        e.preventDefault();
+        if (!consent) { setError(isStudy ? 'Please confirm you are happy for the study team to contact you.' : 'Please confirm you are happy for the provider to contact you.'); return; }
+        setBusy(true); setError(null);
+        try {
+          const res = await api.post('/leads', {
+            kind, entityType, entityId: String(entityId), entityTitle, consent: true,
+            contact: { name: form.name, email: form.email, phone: form.phone, location: form.location },
+            details: { condition: form.condition, interest: form.interest, ageRange: form.ageRange, preferredContact: form.preferredContact, message: form.message, availability: form.availability }
+          });
+          setDone(res.message);
+        } catch (err) { setError(err.message); }
+        setBusy(false);
+      };
+      return (
+        <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 320, padding: '20px', overflowY: 'auto' }}>
+          <form onClick={(e) => e.stopPropagation()} onSubmit={submit} style={{ background: 'linear-gradient(180deg, #1a1f1d 0%, #141918 100%)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '24px', padding: '30px', width: '520px', maxWidth: '100%', animation: 'slideUp 0.25s', maxHeight: '92vh', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px' }}>
+              <div>
+                <div style={{ fontSize: '12px', color: '#7dd3c0', fontWeight: 700, letterSpacing: '0.5px' }}>{isStudy ? 'STUDY PARTICIPATION' : 'REQUEST INFORMATION'}</div>
+                <h2 style={{ fontFamily: '"Fraunces", serif', fontSize: '24px', color: '#fff', margin: '6px 0 4px' }}>{isStudy ? 'Tell the study team you are interested' : `Connect with ${entityTitle}`}</h2>
+                <p style={{ fontSize: '13px', color: '#6b7370' }}>{isStudy ? `${entityTitle}` : 'We pass your request to the provider, who will contact you directly.'}</p>
+              </div>
+              <button type="button" onClick={onClose} style={{ background: 'transparent', border: 'none', color: '#6b7370', fontSize: '24px', cursor: 'pointer', lineHeight: 1 }}>×</button>
+            </div>
+            {done ? (
+              <div style={{ marginTop: '20px' }}>
+                <div style={{ padding: '18px', background: 'rgba(125,211,192,0.1)', border: '1px solid rgba(125,211,192,0.3)', borderRadius: '12px', color: '#7dd3c0', fontSize: '14px', marginBottom: '16px' }}>✓ {done}</div>
+                <button type="button" onClick={onClose} style={{ ...sharedStyles.button, width: '100%' }}>Done</button>
+              </div>
+            ) : (
+              <div style={{ marginTop: '18px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                  <input required value={form.name} onChange={set('name')} placeholder="Full name" style={fieldStyle} />
+                  <input required type="email" value={form.email} onChange={set('email')} placeholder="Email" style={fieldStyle} />
+                  <input value={form.phone} onChange={set('phone')} placeholder="Phone (optional)" style={fieldStyle} />
+                  <input value={form.location} onChange={set('location')} placeholder="City, state / country" style={fieldStyle} />
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                  <input value={form.condition} onChange={set('condition')} placeholder={isStudy ? 'Diagnosis / condition' : 'What are you seeking help with?'} style={fieldStyle} />
+                  {isStudy
+                    ? <select value={form.ageRange} onChange={set('ageRange')} style={fieldStyle}><option value="">Age range</option>{['18–24', '25–34', '35–44', '45–54', '55–64', '65+'].map(a => <option key={a} value={a} style={{ background: '#1a1f1d' }}>{a}</option>)}</select>
+                    : <select value={form.interest} onChange={set('interest')} style={fieldStyle}><option value="">I'm interested in…</option>{['Treatment', 'A consultation', 'Pricing & insurance', 'A retreat / program', 'Referring a patient', 'Other'].map(a => <option key={a} value={a} style={{ background: '#1a1f1d' }}>{a}</option>)}</select>}
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                  <select value={form.preferredContact} onChange={set('preferredContact')} style={fieldStyle}>{[['email', 'Contact me by email'], ['phone', 'Contact me by phone'], ['either', 'Either is fine']].map(([v, l]) => <option key={v} value={v} style={{ background: '#1a1f1d' }}>{l}</option>)}</select>
+                  <input value={form.availability} onChange={set('availability')} placeholder={isStudy ? 'When could you start?' : 'Best time to reach you'} style={fieldStyle} />
+                </div>
+                <textarea value={form.message} onChange={set('message')} rows={3} placeholder={isStudy ? 'Anything the study team should know (previous treatments, travel, questions)' : 'Tell them a little about what you are looking for'} style={{ ...fieldStyle, resize: 'vertical', fontFamily: '"DM Sans", sans-serif' }} />
+                <label style={{ display: 'flex', gap: '10px', alignItems: 'flex-start', fontSize: '13px', color: '#a0a8a4', lineHeight: 1.5, cursor: 'pointer' }}>
+                  <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} style={{ marginTop: '3px' }} />
+                  <span>I agree that Neuly may share these details with {isStudy ? 'the study team / sponsor' : 'this provider'} so they can contact me. Neuly is not a medical provider and this is not medical advice.</span>
+                </label>
+                {error && <div style={{ padding: '12px 16px', fontSize: '13px', color: '#e57373', background: 'rgba(229,115,115,0.1)', border: '1px solid rgba(229,115,115,0.3)', borderRadius: '10px' }}>{error}</div>}
+                <button type="submit" disabled={busy} style={{ ...sharedStyles.button, width: '100%', padding: '14px', opacity: busy ? 0.6 : 1 }}>{busy ? 'Sending…' : isStudy ? "I'm interested — contact me" : 'Send my request'}</button>
+              </div>
+            )}
+          </form>
+        </div>
+      );
+    };
+
+    // Button that opens the lead modal (prompts sign-up when signed out) and logs the view
+    const LeadButton = ({ kind, entityType, entityId, entityTitle, label, style, outline }) => {
+      const { user, requireAuth } = useContext(AuthActionsContext);
+      const [open, setOpen] = useState(false);
+      useEffect(() => {
+        // Deep links from the server pages: /care?inquire=<id>, /studies?interest=<id>
+        const params = new URLSearchParams(window.location.search);
+        const wanted = params.get(kind === 'study_interest' ? 'interest' : 'inquire');
+        if (user && wanted && wanted === String(entityId)) { setOpen(true); window.history.replaceState({}, '', window.location.pathname); }
+      }, [user && user.id]);
+      return (
+        <>
+          <button onClick={() => { if (!user) { requireAuth('signup'); return; } trackView(entityType, entityId, entityTitle); setOpen(true); }} style={{ ...(outline ? sharedStyles.buttonOutline : sharedStyles.button), ...style }}>{label}</button>
+          {open && user && <LeadModal kind={kind} entityType={entityType} entityId={entityId} entityTitle={entityTitle} onClose={() => setOpen(false)} user={user} />}
+        </>
+      );
+    };
+
+    // ============================================================
+    // CARE DIRECTORY — live data from /api/care with inquiry capture
+    // ============================================================
+    const CARE_TYPE_COLORS = { 'Clinic': '#5c6ac4', 'Service Center': '#7dd3c0', 'Telehealth': '#a8c5e2', 'Retreat': '#c084fc', 'Healing Center': '#98d4a0', 'Research Center': '#f0b775', 'Other': '#a0a8a4' };
+    const CarePageLive = ({ user }) => {
+      const isMobile = useIsMobile();
+      const { data, loading } = useLiveEndpoint('/care?limit=1000', ['care_providers']);
+      const [selectedType, setSelectedType] = useState('All');
+      const [selectedCountry, setSelectedCountry] = useState('All');
+      const [verifiedOnly, setVerifiedOnly] = useState(false);
+      const [search, setSearch] = useState('');
+      const [expanded, setExpanded] = useState(null);
+      const providers = (data && data.data) || [];
+      const types = ['All', ...Array.from(new Set(providers.map(p => p.type))).sort()];
+      const countries = ['All', ...Array.from(new Set(providers.map(p => p.location && p.location.country).filter(Boolean))).sort()];
+      const filtered = providers.filter(p =>
+        (selectedType === 'All' || p.type === selectedType) &&
+        (selectedCountry === 'All' || (p.location && p.location.country) === selectedCountry) &&
+        (!verifiedOnly || p.verified) &&
+        (!search || p.name.toLowerCase().includes(search.toLowerCase()) || (p.location && (p.location.city || '').toLowerCase().includes(search.toLowerCase())) || (p.services || []).some(s => s.toLowerCase().includes(search.toLowerCase())))
+      );
+      const toggle = (p) => { const next = expanded === p.id ? null : p.id; setExpanded(next); if (next && user) trackView('care_providers', p.id, p.name); };
+      return (
+        <div style={pageShell(isMobile)}>
+          <div style={pageInner(isMobile)}>
+            <div style={{ textAlign: 'center', marginBottom: '40px' }}><div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}><NeulyLogo height={32} suffix="care" /></div><h1 style={{ fontFamily: '"Fraunces", serif', fontSize: isMobile ? '32px' : '42px', fontWeight: 600, color: '#fff', marginBottom: '12px' }}>Care Directory</h1><p style={{ fontSize: '16px', color: '#a0a8a4', maxWidth: '640px', margin: '0 auto', lineHeight: 1.6 }}>Licensed psilocybin service centers, ketamine clinics, telehealth platforms, retreats and research centers. Verified rows come straight from state regulators. Request information and the provider contacts you.</p></div>
+            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(4, 1fr)', gap: '16px', marginBottom: '28px' }}>
+              {[{ label: 'Providers', value: providers.length, icon: '🏥' }, { label: 'Regulator-verified', value: providers.filter(p => p.verified).length, icon: '✅' }, { label: 'Countries', value: countries.length - 1, icon: '🌍' }, { label: 'Care types', value: types.length - 1, icon: '🧭' }].map((stat, i) => (<div key={i} style={{ ...sharedStyles.card, textAlign: 'center', padding: '18px' }}><span style={{ fontSize: '22px' }}>{stat.icon}</span><div style={{ fontSize: '26px', fontWeight: 700, color: '#fff', margin: '6px 0 2px' }}>{stat.value}</div><div style={{ fontSize: '11px', color: '#6b7370', textTransform: 'uppercase', letterSpacing: '1px' }}>{stat.label}</div></div>))}
+            </div>
+            <div style={{ display: 'flex', gap: '10px', marginBottom: '24px', flexWrap: 'wrap', alignItems: 'center' }}>
+              <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search by name, city or service…" style={{ ...fieldStyle, flex: 1, minWidth: '220px' }} />
+              <select value={selectedType} onChange={(e) => setSelectedType(e.target.value)} style={{ ...fieldStyle, width: 'auto' }}>{types.map(t => <option key={t} value={t} style={{ background: '#1a1f1d' }}>{t === 'All' ? 'All types' : t}</option>)}</select>
+              <select value={selectedCountry} onChange={(e) => setSelectedCountry(e.target.value)} style={{ ...fieldStyle, width: 'auto' }}>{countries.map(c => <option key={c} value={c} style={{ background: '#1a1f1d' }}>{c === 'All' ? 'All countries' : c}</option>)}</select>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: '#a0a8a4', cursor: 'pointer' }}><input type="checkbox" checked={verifiedOnly} onChange={(e) => setVerifiedOnly(e.target.checked)} /> Verified only</label>
+              <span style={{ fontSize: '13px', color: '#6b7370', marginLeft: 'auto' }}>{filtered.length} providers</span>
+            </div>
+            {loading && providers.length === 0 && <p style={{ color: '#6b7370', textAlign: 'center', padding: '40px' }}>Loading providers…</p>}
+            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(2, 1fr)', gap: '20px' }}>
+              {filtered.map(p => {
+                const color = CARE_TYPE_COLORS[p.type] || '#5c6ac4';
+                const where = [p.location && p.location.city, p.location && p.location.state, p.location && p.location.country].filter(Boolean).join(', ');
+                const open = expanded === p.id;
+                return (
+                  <div key={p.id} style={{ ...sharedStyles.card }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', marginBottom: '10px' }}>
+                      <div>
+                        <h3 style={{ fontSize: '19px', fontWeight: 600, color: '#fff', marginBottom: '6px', cursor: 'pointer' }} onClick={() => toggle(p)}>{p.name}</h3>
+                        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                          <span style={{ fontSize: '12px', padding: '4px 10px', borderRadius: '12px', background: `${color}22`, color, fontWeight: 600 }}>{p.type}</span>
+                          {p.verified && <span style={{ fontSize: '12px', padding: '4px 10px', borderRadius: '12px', background: 'rgba(125,211,192,0.15)', color: '#7dd3c0', fontWeight: 600 }}>✓ Verified{p.licenseType ? ` · ${p.licenseType}` : ''}</span>}
+                          {p.acceptsInsurance && <span style={{ fontSize: '12px', padding: '4px 10px', borderRadius: '12px', background: 'rgba(255,255,255,0.05)', color: '#a0a8a4' }}>Insurance</span>}
+                        </div>
+                      </div>
+                      <a href={entityPath('care_providers', p)} style={{ fontSize: '12px', color: '#6b7370', textDecoration: 'none', whiteSpace: 'nowrap' }}>Profile →</a>
+                    </div>
+                    {p.description && <p style={{ fontSize: '13px', color: '#a0a8a4', marginBottom: '12px', lineHeight: 1.55 }}>{open ? p.description : `${p.description.slice(0, 160)}${p.description.length > 160 ? '…' : ''}`}</p>}
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '12px' }}>{(p.substances || []).filter(s => s !== 'Other').map(s => <Chip key={s} color={subColor(s)}>{s}</Chip>)}{(p.services || []).slice(0, open ? 20 : 3).map(s => <Chip key={s} color="#a0a8a4">{s}</Chip>)}</div>
+                    {open && (
+                      <div style={{ fontSize: '13px', color: '#a0a8a4', marginBottom: '12px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+                        {p.licenseNumber && <div><span style={{ color: '#6b7370' }}>Licence:</span> {p.licenseNumber}{p.licenseStatus ? ` (${p.licenseStatus})` : ''}</div>}
+                        {p.phone && <div><span style={{ color: '#6b7370' }}>Phone:</span> {p.phone}</div>}
+                        {p.email && <div><span style={{ color: '#6b7370' }}>Email:</span> {p.email}</div>}
+                        {p.source && <div><span style={{ color: '#6b7370' }}>Source:</span> {p.source}</div>}
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '14px', flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: '12px', color: '#6b7370' }}>📍 {where || '—'}</span>
+                      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                        <button onClick={() => toggle(p)} style={{ ...sharedStyles.buttonOutline, padding: '8px 14px', fontSize: '13px' }}>{open ? 'Less' : 'Details'}</button>
+                        {p.website && <button onClick={() => { if (user) trackView('care_providers', p.id, p.name); openExternal(p.website); }} style={{ ...sharedStyles.buttonOutline, padding: '8px 14px', fontSize: '13px' }}>Website ↗</button>}
+                        <LeadButton kind="care_inquiry" entityType="care_providers" entityId={p.id} entityTitle={p.name} label="Request information" style={{ padding: '8px 16px', fontSize: '13px' }} />
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            {!loading && filtered.length === 0 && <div style={{ textAlign: 'center', padding: '60px', color: '#6b7370' }}><p style={{ fontSize: '18px' }}>No providers match your filters</p></div>}
+            <div style={{ ...sharedStyles.card, marginTop: '36px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
+              <div><h3 style={{ fontSize: '17px', color: '#fff', marginBottom: '4px' }}>Run a clinic, service center or retreat?</h3><p style={{ fontSize: '13px', color: '#a0a8a4' }}>Claim your listing to see who is looking at it and receive patient inquiries.</p></div>
+              <a href="/partners" style={{ ...smallButton, textDecoration: 'none' }}>Claim your listing →</a>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    // ============================================================
+    // PARTNER PORTAL — institutions claim listings, see activity, unlock leads
+    // ============================================================
+    const centsToUsd = (c) => `$${(Number(c || 0) / 100).toLocaleString('en-US', { minimumFractionDigits: 0 })}`;
+    const PartnersPage = ({ user, openAuth, setCurrentPage }) => {
+      const isMobile = useIsMobile();
+      const claims = useFetch(user ? '/partners/claims' : null, [user && user.id]);
+      const [query, setQuery] = useState('');
+      const [results, setResults] = useState([]);
+      const [picked, setPicked] = useState(null);
+      const [organization, setOrganization] = useState((user && user.organization) || '');
+      const [contactEmail, setContactEmail] = useState((user && user.email) || '');
+      const [message, setMessage] = useState('');
+      const [busy, setBusy] = useState(false);
+      const [active, setActive] = useState(() => new URLSearchParams(window.location.search).get('claim'));
+      useEffect(() => {
+        const params = new URLSearchParams(window.location.search);
+        if (params.get('unlocked')) { notify('Payment received — the lead is unlocked below.'); window.history.replaceState({}, '', `/partners${params.get('claim') ? `?claim=${params.get('claim')}` : ''}`); }
+      }, []);
+      useEffect(() => {
+        if (!user || query.trim().length < 2) { setResults([]); return; }
+        const t = setTimeout(() => { api.send('GET', `/partners/search?q=${encodeURIComponent(query.trim())}`).then(r => setResults(r.data || [])).catch(() => setResults([])); }, 250);
+        return () => clearTimeout(t);
+      }, [query, user && user.id]);
+
+      if (!user) {
+        return (
+          <div style={pageShell(isMobile)}><div style={{ ...pageInner(isMobile), maxWidth: '900px' }}>
+            <div style={{ textAlign: 'center', marginBottom: '40px' }}>
+              <div style={{ fontSize: '12px', color: '#7dd3c0', fontWeight: 700, letterSpacing: '0.6px', marginBottom: '12px' }}>FOR CLINICS, SERVICE CENTERS, RETREATS & STUDY TEAMS</div>
+              <h1 style={{ fontFamily: '"Fraunces", serif', fontSize: isMobile ? '32px' : '44px', color: '#fff', marginBottom: '14px' }}>Meet the people already looking for you</h1>
+              <p style={{ fontSize: '16px', color: '#a0a8a4', lineHeight: 1.7, maxWidth: '640px', margin: '0 auto 28px' }}>Every member of Neuly browsing care providers and clinical studies is signed in. Claim your listing to see who is viewing it, receive inquiries from people who want your care or want to join your study, and pay only for the introductions you unlock.</p>
+              <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', flexWrap: 'wrap' }}><button onClick={() => openAuth('signup')} style={sharedStyles.button}>Create a partner account</button><button onClick={() => openAuth('login')} style={sharedStyles.buttonOutline}>Log in</button></div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(3, 1fr)', gap: '16px' }}>
+              {[['1. Claim', 'Find your clinic, center, retreat, study or company and claim it. We verify every claim by hand.'], ['2. Watch', 'See views, unique viewers and the segments looking at your listing — free, forever.'], ['3. Connect', 'Patients and prospective participants raise their hand. Unlock their contact details per lead; no subscription.']].map(([h, b]) => (
+                <div key={h} style={sharedStyles.card}><h3 style={{ fontSize: '17px', color: '#fff', marginBottom: '8px' }}>{h}</h3><p style={{ fontSize: '14px', color: '#a0a8a4', lineHeight: 1.6 }}>{b}</p></div>
+              ))}
+            </div>
+          </div></div>
+        );
+      }
+
+      const submitClaim = async (e) => {
+        e.preventDefault();
+        if (!picked || !organization.trim()) { notify('Pick a listing and enter your organization', 'error'); return; }
+        setBusy(true);
+        try { const res = await api.post('/partners/claims', { entityType: picked.entityType, entityId: picked.entityId, organization, contactEmail, message }); notify(res.message); setPicked(null); setQuery(''); setMessage(''); claims.reload(); }
+        catch (err) { notify(err.message, 'error'); }
+        setBusy(false);
+      };
+      const rows = (claims.data && claims.data.data) || [];
+      if (active) {
+        const claim = rows.find(c => c.id === active);
+        return <PartnerActivity claimId={active} claim={claim} onBack={() => { setActive(null); window.history.replaceState({}, '', '/partners'); claims.reload(); }} />;
+      }
+      return (
+        <div style={pageShell(isMobile)}>
+          <div style={pageInner(isMobile)}>
+            <div style={{ marginBottom: '28px' }}>
+              <h1 style={{ fontFamily: '"Fraunces", serif', fontSize: isMobile ? '30px' : '38px', fontWeight: 600, color: '#fff' }}>Partner portal</h1>
+              <p style={{ fontSize: '14px', color: '#6b7370', marginTop: '4px' }}>Claim listings, watch activity, unlock inquiries. Every claim is verified by Neuly before activity is shown.</p>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1.2fr', gap: '24px' }}>
+              <form onSubmit={submitClaim} style={sharedStyles.card}>
+                <h3 style={{ fontSize: '18px', color: '#fff', marginBottom: '6px' }}>Claim a listing</h3>
+                <p style={{ fontSize: '13px', color: '#6b7370', marginBottom: '14px' }}>Care providers, clinical studies (by NCT id, title or sponsor) and companies.</p>
+                <input value={query} onChange={(e) => { setQuery(e.target.value); setPicked(null); }} placeholder="Search your clinic, study or company…" style={{ ...fieldStyle, marginBottom: '8px' }} />
+                {results.length > 0 && !picked && (
+                  <div style={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: '10px', marginBottom: '10px', maxHeight: '220px', overflowY: 'auto' }}>
+                    {results.map(r => <div key={`${r.entityType}:${r.entityId}`} onClick={() => { setPicked(r); setQuery(r.title); }} style={{ padding: '10px 12px', cursor: 'pointer', borderBottom: '1px solid rgba(255,255,255,0.05)' }}><div style={{ fontSize: '14px', color: '#fff' }}>{r.title}</div><div style={{ fontSize: '12px', color: '#6b7370' }}>{ENTITY_TYPE_LABELS[r.entityType]} · {r.subtitle}</div></div>)}
+                  </div>
+                )}
+                {picked && <div style={{ fontSize: '13px', color: '#7dd3c0', marginBottom: '10px' }}>✓ {ENTITY_TYPE_LABELS[picked.entityType]} selected</div>}
+                <input value={organization} onChange={(e) => setOrganization(e.target.value)} placeholder="Your organization (legal name)" style={{ ...fieldStyle, marginBottom: '8px' }} />
+                <input type="email" value={contactEmail} onChange={(e) => setContactEmail(e.target.value)} placeholder="Where should new leads be sent?" style={{ ...fieldStyle, marginBottom: '8px' }} />
+                <textarea value={message} onChange={(e) => setMessage(e.target.value)} rows={2} placeholder="Your role and how we can verify you (optional)" style={{ ...fieldStyle, marginBottom: '12px', resize: 'vertical', fontFamily: '"DM Sans", sans-serif' }} />
+                <button type="submit" disabled={busy} style={smallButton}>{busy ? 'Submitting…' : 'Submit claim'}</button>
+              </form>
+              <div style={sharedStyles.card}>
+                <h3 style={{ fontSize: '18px', color: '#fff', marginBottom: '12px' }}>Your listings ({rows.length})</h3>
+                {rows.length === 0 && <p style={{ fontSize: '14px', color: '#6b7370' }}>No claims yet. Search for your listing on the left.</p>}
+                {rows.map(c => (
+                  <div key={c.id} onClick={() => c.status === 'approved' && (setActive(c.id), window.history.replaceState({}, '', `/partners?claim=${c.id}`))} style={{ padding: '14px 0', borderBottom: '1px solid rgba(255,255,255,0.05)', cursor: c.status === 'approved' ? 'pointer' : 'default' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', alignItems: 'flex-start' }}>
+                      <div><div style={{ fontSize: '15px', color: '#fff', fontWeight: 600 }}>{c.entityTitle}</div><div style={{ fontSize: '12px', color: '#6b7370' }}>{ENTITY_TYPE_LABELS[c.entityType]} · {c.organization} · claimed {timeAgo(c.createdAt)}</div></div>
+                      <span style={{ fontSize: '11px', fontWeight: 700, padding: '4px 10px', borderRadius: '10px', background: c.status === 'approved' ? 'rgba(125,211,192,0.15)' : c.status === 'rejected' ? 'rgba(229,115,115,0.15)' : 'rgba(240,183,117,0.15)', color: c.status === 'approved' ? '#7dd3c0' : c.status === 'rejected' ? '#e57373' : '#f0b775', textTransform: 'uppercase' }}>{c.status}</span>
+                    </div>
+                    {c.stats && <div style={{ display: 'flex', gap: '18px', marginTop: '8px', fontSize: '13px', color: '#a0a8a4' }}><span><strong style={{ color: '#fff' }}>{c.stats.views30d}</strong> views · 30d</span><span><strong style={{ color: '#fff' }}>{c.stats.viewers30d}</strong> people</span><span><strong style={{ color: '#7dd3c0' }}>{c.stats.leadsTotal}</strong> leads</span><span>{c.stats.leadsUnlocked} unlocked</span><span style={{ marginLeft: 'auto', color: '#7dd3c0' }}>Open →</span></div>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    const PartnerActivity = ({ claimId, claim, onBack }) => {
+      const isMobile = useIsMobile();
+      const { data, error, loading, reload } = useFetch(`/partners/claims/${claimId}/activity`);
+      const [busy, setBusy] = useState(null);
+      const unlock = async (leadId) => {
+        setBusy(leadId);
+        try {
+          const res = await api.post(`/partners/leads/${leadId}/unlock`, { claimId });
+          if (res.alreadyUnlocked) { reload(); return; }
+          window.location.href = res.url;
+        } catch (err) { notify(err.message, 'error'); setBusy(null); }
+      };
+      const maxViews = Math.max(1, ...(((data && data.daily) || []).map(d => d.views)));
+      return (
+        <div style={pageShell(isMobile)}>
+          <div style={pageInner(isMobile)}>
+            <button onClick={onBack} style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'transparent', border: 'none', color: '#6b7370', fontSize: '14px', cursor: 'pointer', marginBottom: '20px' }}><span style={{ fontSize: '18px' }}>←</span> All listings</button>
+            {loading && !data && <p style={{ color: '#6b7370' }}>Loading…</p>}
+            {error && <p style={{ color: '#e57373' }}>{error}</p>}
+            {data && (
+              <>
+                <div style={{ marginBottom: '24px' }}>
+                  <div style={{ fontSize: '12px', color: '#7dd3c0', fontWeight: 700, letterSpacing: '0.5px' }}>{ENTITY_TYPE_LABELS[data.claim.entityType]} · {data.claim.organization}</div>
+                  <h1 style={{ fontFamily: '"Fraunces", serif', fontSize: isMobile ? '26px' : '34px', color: '#fff', marginTop: '4px' }}>{data.claim.entityTitle}</h1>
+                  <p style={{ fontSize: '13px', color: '#6b7370', marginTop: '6px' }}>Lead price for this listing: <strong style={{ color: '#fff' }}>{centsToUsd(data.claim.leadPriceCents)}</strong> per unlocked inquiry. Activity is free.</p>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(4, 1fr)', gap: '12px', marginBottom: '24px' }}>
+                  {[['Views (all time)', data.totals.viewsAllTime], ['Unique viewers', data.totals.viewersAllTime], ['Inquiries', data.totals.leads], ['Unlocked', data.totals.unlocked]].map(([k, v]) => <div key={k} style={{ ...sharedStyles.card, padding: '16px', textAlign: 'center' }}><div style={{ fontFamily: '"Fraunces", serif', fontSize: '26px', color: '#7dd3c0' }}>{v}</div><div style={{ fontSize: '12px', color: '#6b7370' }}>{k}</div></div>)}
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '24px', marginBottom: '24px' }}>
+                  <div style={sharedStyles.card}>
+                    <h3 style={{ fontSize: '16px', color: '#fff', marginBottom: '12px' }}>Views — last 30 days</h3>
+                    {data.daily.length === 0 ? <p style={{ fontSize: '13px', color: '#6b7370' }}>No views yet.</p> : <div style={{ display: 'flex', alignItems: 'flex-end', gap: '3px', height: '90px' }}>{data.daily.map(d => <div key={d.day} title={`${d.day}: ${d.views} views, ${d.viewers} people`} style={{ flex: 1, background: '#7dd3c0', opacity: 0.85, borderRadius: '3px 3px 0 0', height: `${Math.max(4, (d.views / maxViews) * 100)}%` }} />)}</div>}
+                  </div>
+                  <div style={sharedStyles.card}>
+                    <h3 style={{ fontSize: '16px', color: '#fff', marginBottom: '12px' }}>Who is looking</h3>
+                    {data.segments.length === 0 ? <p style={{ fontSize: '13px', color: '#6b7370' }}>Segments appear as viewers accumulate.</p> : data.segments.map(s => <div key={s.segment} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', padding: '6px 0', borderBottom: '1px solid rgba(255,255,255,0.04)' }}><span style={{ color: '#a0a8a4' }}>{s.segment}</span><span style={{ color: '#fff' }}>{s.viewers}</span></div>)}
+                  </div>
+                </div>
+                <div style={sharedStyles.card}>
+                  <h3 style={{ fontSize: '16px', color: '#fff', marginBottom: '4px' }}>Inquiries ({data.leads.length})</h3>
+                  <p style={{ fontSize: '12px', color: '#6b7370', marginBottom: '14px' }}>Contact details are revealed when you unlock an inquiry. {data.billingEnabled ? 'Payment is by card through Stripe.' : 'Online payment is not configured yet — email sales@neuly.io to unlock.'}</p>
+                  {data.leads.length === 0 && <p style={{ fontSize: '14px', color: '#6b7370' }}>No inquiries yet. They appear here the moment someone requests information.</p>}
+                  {data.leads.map(l => (
+                    <div key={l.id} style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1.4fr 1fr auto', gap: '12px', alignItems: 'center', padding: '14px 0', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                      <div>
+                        <div style={{ fontSize: '15px', color: '#fff', fontWeight: 600 }}>{l.contact.name}{l.unlocked ? '' : <span style={{ fontSize: '11px', color: '#f0b775', marginLeft: '8px' }}>LOCKED</span>}</div>
+                        <div style={{ fontSize: '12px', color: '#6b7370' }}>{l.kind === 'study_interest' ? 'Study participation' : 'Care inquiry'} · {timeAgo(l.createdAt)}{l.contact.location ? ` · ${l.contact.location}` : ''}{l.details.condition ? ` · ${l.details.condition}` : ''}{l.details.ageRange ? ` · ${l.details.ageRange}` : ''}</div>
+                        {l.unlocked ? (
+                          <div style={{ fontSize: '13px', color: '#a0a8a4', marginTop: '6px' }}>{l.contact.email}{l.contact.phone ? ` · ${l.contact.phone}` : ''}{l.details.preferredContact ? ` · prefers ${l.details.preferredContact}` : ''}{l.details.message ? <div style={{ marginTop: '4px', color: '#e8ebe9' }}>“{l.details.message}”</div> : null}</div>
+                        ) : (
+                          <div style={{ fontSize: '13px', color: '#6b7370', marginTop: '6px' }}>{l.contact.emailDomain ? `@${l.contact.emailDomain}` : ''}{l.details.messagePreview ? ` · “${l.details.messagePreview}”` : ''}</div>
+                        )}
+                      </div>
+                      <div style={{ fontSize: '12px', color: '#6b7370' }}>{l.details.interest || ''}{l.details.availability ? ` · ${l.details.availability}` : ''}</div>
+                      <div>{l.unlocked ? <span style={{ fontSize: '12px', color: '#7dd3c0' }}>✓ Unlocked {l.unlockedAt ? timeAgo(l.unlockedAt) : ''}</span> : <button onClick={() => unlock(l.id)} disabled={busy === l.id} style={{ ...smallButton, whiteSpace: 'nowrap' }}>{busy === l.id ? 'Opening…' : `Unlock · ${centsToUsd(l.priceCents)}`}</button>}</div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      );
+    };
+
+    // ---- Admin: marketplace tab
+    const AdminMarketplaceTab = () => {
+      const overview = useFetch('/admin/marketplace/overview');
+      const claims = useFetch('/admin/marketplace/claims');
+      const leads = useFetch('/admin/marketplace/leads?limit=100');
+      const [prices, setPrices] = useState({});
+      const setStatus = async (id, status) => { try { await api.send('PATCH', `/admin/marketplace/claims/${id}`, { status }); claims.reload(); overview.reload(); notify(`Claim ${status}`); } catch (err) { notify(err.message, 'error'); } };
+      const savePrice = async (id) => { const v = prices[id]; try { await api.send('PATCH', `/admin/marketplace/claims/${id}`, { leadPriceCents: v === '' ? null : Math.round(Number(v) * 100) }); claims.reload(); notify('Price saved'); } catch (err) { notify(err.message, 'error'); } };
+      const setLeadStatus = async (id, status) => { try { await api.send('PATCH', `/admin/marketplace/leads/${id}`, { status }); leads.reload(); } catch (err) { notify(err.message, 'error'); } };
+      const comp = async (leadId, claimId) => { try { await api.post(`/admin/marketplace/leads/${leadId}/comp`, { claimId }); leads.reload(); notify('Lead comped to partner'); } catch (err) { notify(err.message, 'error'); } };
+      const o = overview.data;
+      const approvedByEntity = {};
+      for (const c of (claims.data && claims.data.data) || []) if (c.status === 'approved') (approvedByEntity[`${c.entityType}:${c.entityId}`] = approvedByEntity[`${c.entityType}:${c.entityId}`] || []).push(c);
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+          {o && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '12px' }}>
+              {[['Pending claims', o.claims.pending || 0], ['Approved', o.claims.approved || 0], ['Leads', o.leads.reduce((n, l) => n + l.n, 0)], ['Leads (7d)', o.leads.reduce((n, l) => n + l.last7d, 0)], ['Lead revenue', centsToUsd(o.revenue.paidCents)], ['Views (7d)', o.views.views_7d]].map(([k, v]) => <div key={k} style={{ ...sharedStyles.card, padding: '14px', textAlign: 'center' }}><div style={{ fontFamily: '"Fraunces", serif', fontSize: '22px', color: '#7dd3c0' }}>{v}</div><div style={{ fontSize: '11px', color: '#6b7370' }}>{k}</div></div>)}
+            </div>
+          )}
+          <div style={sharedStyles.card}>
+            <h3 style={{ fontSize: '18px', color: '#fff', marginBottom: '12px' }}>Listing claims</h3>
+            {((claims.data && claims.data.data) || []).map(c => (
+              <div key={c.id} style={{ display: 'grid', gridTemplateColumns: '1.6fr 1fr auto', gap: '12px', alignItems: 'center', padding: '12px 0', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                <div><div style={{ fontSize: '14px', color: '#fff' }}>{c.entityTitle}</div><div style={{ fontSize: '12px', color: '#6b7370' }}>{ENTITY_TYPE_LABELS[c.entityType]} · {c.organization} · {c.userEmail} → leads to {c.contactEmail} · {timeAgo(c.createdAt)}{c.message ? ` · “${c.message}”` : ''}</div></div>
+                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}><span style={{ fontSize: '12px', color: '#6b7370' }}>$</span><input value={prices[c.id] !== undefined ? prices[c.id] : (c.leadPriceCents / 100)} onChange={(e) => setPrices({ ...prices, [c.id]: e.target.value })} style={{ ...fieldStyle, padding: '6px 8px', fontSize: '12px', width: '80px' }} /><button onClick={() => savePrice(c.id)} style={{ ...smallOutline, padding: '6px 10px', fontSize: '12px' }}>Set</button></div>
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <span style={{ fontSize: '11px', fontWeight: 700, alignSelf: 'center', color: c.status === 'approved' ? '#7dd3c0' : c.status === 'rejected' ? '#e57373' : '#f0b775' }}>{c.status.toUpperCase()}</span>
+                  {c.status !== 'approved' && <button onClick={() => setStatus(c.id, 'approved')} style={{ ...smallButton, padding: '6px 10px', fontSize: '12px' }}>Approve</button>}
+                  {c.status !== 'rejected' && <button onClick={() => setStatus(c.id, 'rejected')} style={{ ...dangerOutline, padding: '6px 10px', fontSize: '12px' }}>Reject</button>}
+                </div>
+              </div>
+            ))}
+            {claims.data && claims.data.data.length === 0 && <p style={{ fontSize: '13px', color: '#6b7370' }}>No claims yet.</p>}
+          </div>
+          <div style={sharedStyles.card}>
+            <h3 style={{ fontSize: '18px', color: '#fff', marginBottom: '12px' }}>Leads</h3>
+            {((leads.data && leads.data.data) || []).map(l => {
+              const partners = approvedByEntity[`${l.entityType}:${l.entityId}`] || [];
+              return (
+                <div key={l.id} style={{ padding: '12px 0', borderBottom: '1px solid rgba(255,255,255,0.05)', display: 'grid', gridTemplateColumns: '1.6fr 1fr auto', gap: '12px', alignItems: 'center' }}>
+                  <div><div style={{ fontSize: '14px', color: '#fff' }}>{l.contact.name} <span style={{ color: '#6b7370' }}>· {l.contact.email}{l.contact.phone ? ` · ${l.contact.phone}` : ''}</span></div><div style={{ fontSize: '12px', color: '#6b7370' }}>{l.kind === 'study_interest' ? 'Study' : 'Care'} → {l.entityTitle} · {timeAgo(l.createdAt)}{l.details.condition ? ` · ${l.details.condition}` : ''} · {l.partners} partner{l.partners === 1 ? '' : 's'} · {l.purchases.filter(p => ['paid', 'comped'].includes(p.status)).length} unlocked</div></div>
+                  <select value={l.status} onChange={(e) => setLeadStatus(l.id, e.target.value)} style={{ ...fieldStyle, padding: '6px 8px', fontSize: '12px' }}>{['new', 'contacted', 'closed', 'spam'].map(s => <option key={s} value={s} style={{ background: '#1a1f1d' }}>{s}</option>)}</select>
+                  <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>{partners.map(p => <button key={p.id} onClick={() => comp(l.id, p.id)} style={{ ...smallOutline, padding: '6px 10px', fontSize: '11px' }}>Comp → {p.organization.slice(0, 18)}</button>)}</div>
+                </div>
+              );
+            })}
+            {leads.data && leads.data.data.length === 0 && <p style={{ fontSize: '13px', color: '#6b7370' }}>No leads yet.</p>}
+          </div>
+        </div>
+      );
+    };
+
+    // ---- Account: the user's own requests
+    const MyRequests = () => {
+      const { data } = useFetch('/leads/mine');
+      const rows = (data && data.data) || [];
+      if (rows.length === 0) return null;
+      return (
+        <div style={{ ...sharedStyles.card, maxWidth: '560px', marginTop: '24px' }}>
+          <h3 style={{ fontSize: '16px', color: '#fff', marginBottom: '10px' }}>Your requests</h3>
+          {rows.map(r => <div key={r.id} style={{ fontSize: '13px', color: '#a0a8a4', padding: '8px 0', borderBottom: '1px solid rgba(255,255,255,0.05)' }}><span style={{ color: '#fff' }}>{r.entityTitle}</span> · {r.kind === 'study_interest' ? 'study participation' : 'care inquiry'} · {timeAgo(r.createdAt)} · <span style={{ color: '#7dd3c0' }}>{r.status}</span></div>)}
         </div>
       );
     };
@@ -4567,6 +5090,23 @@
       const [authModal, setAuthModal] = useState(null); // null | 'login' | 'signup' | 'forgot'
       const [selectedCompany, setSelectedCompany] = useState(null);
       const [selectedPerson, setSelectedPerson] = useState(null);
+      // ?auth=signup|login opens the modal (links from server-rendered pages);
+      // ?next= is where to go afterwards (an internal path or an outbound URL,
+      // which still passes through the leaving-Neuly interstitial).
+      const [nextAfterAuth, setNextAfterAuth] = useState(() => new URLSearchParams(window.location.search).get('next'));
+      useEffect(() => {
+        const params = new URLSearchParams(window.location.search);
+        const wanted = params.get('auth');
+        if (wanted === 'signup' || wanted === 'login') {
+          setAuthModal(wanted);
+          params.delete('auth'); params.delete('next');
+          window.history.replaceState({}, '', `${window.location.pathname}${params.toString() ? `?${params}` : ''}`);
+        }
+      }, []);
+      // Gated page while signed out: prompt for an account once the session check is done
+      useEffect(() => {
+        if (authChecked && !user && !PUBLIC_PAGES.has(currentPage) && !authModal) setAuthModal('signup');
+      }, [authChecked, user, currentPage]);
 
       // Keep the URL in sync so /pricing, /account, /datasets etc. are
       // linkable and survive refresh; back/forward navigate the app.
@@ -4597,14 +5137,22 @@
       const onAuthed = (authedUser) => {
         setUser(authedUser);
         setAuthModal(null);
-        // Stay on account-ish pages the user was already heading to
-        if (!['pricing', 'datasets', 'account', 'shared-dataset'].includes(currentPage)) setCurrentPage('dashboard');
+        window.dispatchEvent(new CustomEvent('neuly:auth', { detail: { user: authedUser } }));
+        if (nextAfterAuth) {
+          const next = nextAfterAuth;
+          setNextAfterAuth(null);
+          if (/^https?:\/\//i.test(next)) { openExternal(next); return; }
+          if (next.startsWith('/')) { window.location.href = next; return; }
+        }
+        // Stay where the user was heading; only the marketing page moves to the dashboard
+        if (currentPage === 'home') setCurrentPage('dashboard');
         if (currentPage === 'reset-password') setCurrentPage('account');
         window.scrollTo(0, 0);
       };
       const signOut = () => {
         api.post('/auth/logout').catch(() => undefined);
         setUser(null);
+        window.dispatchEvent(new CustomEvent('neuly:auth', { detail: { user: null } }));
         setCurrentPage('home');
       };
 
@@ -4630,8 +5178,8 @@
         return (
           <div style={{ position: 'relative', zIndex: 1, minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '120px 20px' }}>
             <div style={{ textAlign: 'center' }}>
-              <h2 style={{ fontFamily: '"Fraunces", serif', fontSize: '30px', color: '#fff', marginBottom: '12px' }}>Sign in to continue</h2>
-              <p style={{ color: '#a0a8a4', marginBottom: '24px' }}>This page is part of your Neuly account.</p>
+              <h2 style={{ fontFamily: '"Fraunces", serif', fontSize: '30px', color: '#fff', marginBottom: '12px' }}>Create a free account to continue</h2>
+              <p style={{ color: '#a0a8a4', marginBottom: '24px', maxWidth: '460px' }}>Everything beyond the front page — the live feed, every trial, company, person, study and provider — is for Neuly members. It takes ten seconds.</p>
               <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
                 <button onClick={() => openAuth('login')} style={sharedStyles.button}>Log in</button>
                 <button onClick={() => openAuth('signup')} style={sharedStyles.buttonOutline}>Create account</button>
@@ -4660,7 +5208,9 @@
           case 'education':
             return <EducationPage user={user} />;
           case 'care':
-            return <CarePage user={user} />;
+            return <CarePageLive user={user} />;
+          case 'partners':
+            return <PartnersPage user={user} openAuth={openAuth} setCurrentPage={setCurrentPage} />;
           case 'studies':
             return <StudiesPage user={user} />;
           case 'jobs':
@@ -4688,6 +5238,8 @@
 
       const isMobile = useIsMobile();
       const appMode = Boolean(user) && isMobile;
+      // Everything beyond the front pages requires an account
+      const pageContent = (!user && !PUBLIC_PAGES.has(currentPage)) ? gated(null) : renderPage();
 
       return (
         <AuthActionsContext.Provider value={{ user, requireAuth: openAuth, setUser }}>
@@ -4696,9 +5248,10 @@
           <div style={{ ...sharedStyles.container, ...(appMode ? { paddingBottom: 'calc(84px + env(safe-area-inset-bottom))' } : {}) }}>
             <AmbientBackground />
             <Navigation user={user} openAuth={openAuth} signOut={signOut} currentPage={currentPage} setCurrentPage={setCurrentPage} />
-            {renderPage()}
+            {pageContent}
             {!appMode && <Footer setCurrentPage={setCurrentPage} />}
-            {authModal && <AuthModal mode={authModal} setMode={setAuthModal} onClose={() => setAuthModal(null)} onAuthed={onAuthed} />}
+            {authModal && <AuthModal mode={authModal} setMode={setAuthModal} onClose={() => { setAuthModal(null); if (!user && !PUBLIC_PAGES.has(currentPage)) setCurrentPage('home'); }} onAuthed={onAuthed} />}
+            <ExternalLinkModal />
             <ToastHost />
           </div>
         </DatasetsProvider>

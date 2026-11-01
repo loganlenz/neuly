@@ -3,7 +3,10 @@ import {
   Company,
   CompanySchema,
   ClinicalTrial,
-  Substance
+  Substance,
+  Grant,
+  NewsItem,
+  FundingEvent
 } from '../models/types.js';
 import { detectSubstances } from '../utils/substances.js';
 import { logger } from '../utils/logger.js';
@@ -60,8 +63,14 @@ interface KnownCompany {
 }
 
 export interface CompanyCrawlerOptions {
-  /** Stored clinical trials: industry sponsors become companies */
+  /** Stored clinical trials: industry sponsors (and corporate collaborators) become companies */
   trials?: ClinicalTrial[];
+  /** Stored NIH grants: awardee organisations that are companies (SBIR/STTR) */
+  grants?: Grant[];
+  /** Stored news: companies named repeatedly in sector headlines */
+  news?: NewsItem[];
+  /** Stored Form D filings: every filer is a company in the space */
+  fundingEvents?: FundingEvent[];
   /** Skip EDGAR full-text discovery (tests / offline) */
   skipDiscovery?: boolean;
 }
@@ -97,6 +106,12 @@ const DEVICE_SIC = new Set(['3826', '3841', '3842', '3843', '3844', '3845', '385
 const VEHICLE_NAME = /acquisition\s+corp|\bspac\b|\btrust\b|\betf\b|\bfunds?\b|series solutions|\bspv\b|master partnership|\bl\.?p\.?$|capital corp|holdings? ii\b|opportunit(y|ies) fund|\bventures? (fund|i{1,3})\b/i;
 
 const LEGAL_SUFFIX = /[,.]?\s*\b(inc|incorporated|corp|corporation|ltd|limited|plc|llc|pbc|n\.?v\.?|ag|gmbh|sa|s\.a\.|co|company|holdings?|group)\b\.?/gi;
+
+/** Names that read as a company rather than a hospital, university or agency */
+const CORPORATE_NAME = /\b(inc|incorporated|corp|corporation|ltd|limited|plc|llc|pbc|gmbh|ag|s\.?a\.?|n\.?v\.?|therapeutics|pharmaceuticals?|pharma|biosciences?|bioscience|biotech(nology)?|biopharma|life sciences|neuroscience(s)?|medicines?|labs?|laboratories|health|wellness|clinics?|psychedelics|technologies|holdings|ventures|partners)\b/i;
+const ACADEMIC_NAME = /\b(university|universit|college|hospital|institute of technology|school of|nhs|health system|medical center|medical centre|foundation|ministry|department of|national institute|veterans|va medical|academy|research council)\b/i;
+/** "Compass Pathways", "Atai Life Sciences", "Usona Institute" style names in headlines */
+const NEWS_COMPANY_PATTERN = /\b([A-Z][A-Za-z0-9&'’.-]+(?:\s+[A-Z][A-Za-z0-9&'’.-]+){0,3}\s+(?:Therapeutics|Pharmaceuticals|Pharma|Biosciences|Bioscience|Biotech|Biopharma|Life Sciences|Neuroscience|Neurosciences|Medicine|Medicines|Health|Wellness|Clinics?|Labs|Laboratories|Psychedelics|Institute|Technologies|Holdings))\b/g;
 
 /** Normalise a company name for matching across sources */
 export function normalizeCompanyName(name: string): string {
@@ -176,8 +191,9 @@ export class CompanyCrawler extends BaseCrawler<Company> {
 
   /** Substance terms searched in EDGAR full-text discovery */
   private static readonly DISCOVERY_TERMS = [
-    'psilocybin', 'psychedelic', 'MDMA', 'ibogaine', 'ayahuasca', '5-MeO-DMT',
-    'ketamine-assisted', 'esketamine', 'kratom', 'kava', 'psilocin', 'dimethyltryptamine'
+    'psilocybin', 'psychedelic', 'psychedelics', 'MDMA', 'ibogaine', 'ayahuasca', '5-MeO-DMT',
+    'ketamine-assisted', 'esketamine', 'kratom', 'kava', 'psilocin', 'dimethyltryptamine',
+    'lysergic acid diethylamide', 'mescaline', 'psychoplastogen', 'entheogen', 'ketamine clinic'
   ];
 
   /** How far back EDGAR full-text discovery looks */
@@ -194,7 +210,7 @@ export class CompanyCrawler extends BaseCrawler<Company> {
   private static readonly DISCOVERY_SINGLE_TERM_MIN_DOCS = 20;
 
   /** Cap on submissions lookups per run (rate-limit hygiene) */
-  private static readonly DISCOVERY_MAX_LOOKUPS = 80;
+  private static readonly DISCOVERY_MAX_LOOKUPS = Number(process.env.EDGAR_DISCOVERY_LOOKUPS ?? 150);
 
   private readonly options: CompanyCrawlerOptions;
   private tickerMap: Map<string, SecTickerEntry> | null = null;
@@ -247,6 +263,19 @@ export class CompanyCrawler extends BaseCrawler<Company> {
     }
     if (sponsorCandidates.length > 0) {
       logger.info(`[SEC EDGAR] ${sponsorCandidates.length} industry sponsors from ClinicalTrials.gov`);
+    }
+
+    // 2b. Corporate collaborators on tracked trials, NIH awardee companies,
+    //     Form D filers and companies named repeatedly in sector news.
+    const extra = [
+      ...this.fromTrialCollaborators(this.options.trials ?? []),
+      ...this.fromGrantAwardees(this.options.grants ?? []),
+      ...this.fromFundingFilers(this.options.fundingEvents ?? []),
+      ...this.fromNewsMentions(this.options.news ?? [])
+    ];
+    for (const candidate of extra) this.mergeCandidate(candidates, candidate);
+    if (extra.length > 0) {
+      logger.info(`[SEC EDGAR] ${extra.length} candidates from collaborators, NIH awardees, Form D filers and news`);
     }
 
     // 3. SEC filers whose filings mention tracked substances. Curated and
@@ -330,6 +359,108 @@ export class CompanyCrawler extends BaseCrawler<Company> {
       });
     }
     return candidates;
+  }
+
+  /** Corporate collaborators on tracked trials (CT.gov gives no class for collaborators, so names must look corporate) */
+  private fromTrialCollaborators(trials: ClinicalTrial[]): Candidate[] {
+    const byName = new Map<string, { name: string; trials: ClinicalTrial[] }>();
+    for (const trial of trials) {
+      for (const collaborator of trial.collaborators ?? []) {
+        if (!CORPORATE_NAME.test(collaborator) || ACADEMIC_NAME.test(collaborator)) continue;
+        const key = normalizeCompanyName(collaborator);
+        if (!key) continue;
+        const entry = byName.get(key) ?? { name: cleanText(collaborator) || collaborator, trials: [] };
+        entry.trials.push(trial);
+        byName.set(key, entry);
+      }
+    }
+    return Array.from(byName.values()).map(({ name, trials: on }) => ({
+      name,
+      substances: Array.from(new Set(on.flatMap(t => t.substances))).filter(s => s !== 'Other') as Substance[],
+      type: 'Biotech' as const,
+      stage: 'Private' as const,
+      source: 'ClinicalTrials.gov collaborator',
+      evidence: on.map(t => `Collaborator on ${t.nctId}`).slice(0, 25)
+    })).filter(c => c.substances.length > 0);
+  }
+
+  /** NIH awardees that are companies (SBIR/STTR grants go to small businesses) */
+  private fromGrantAwardees(grants: Grant[]): Candidate[] {
+    const byName = new Map<string, { name: string; grants: Grant[] }>();
+    for (const grant of grants) {
+      const org = grant.organization;
+      if (!org || !CORPORATE_NAME.test(org) || ACADEMIC_NAME.test(org)) continue;
+      const key = normalizeCompanyName(org);
+      if (!key) continue;
+      const entry = byName.get(key) ?? { name: cleanDisplayName(org), grants: [] };
+      entry.grants.push(grant);
+      byName.set(key, entry);
+    }
+    return Array.from(byName.values()).map(({ name, grants: awarded }) => ({
+      name,
+      substances: Array.from(new Set(awarded.flatMap(g => g.substances))).filter(s => s !== 'Other') as Substance[],
+      type: 'Biotech' as const,
+      stage: 'Private' as const,
+      focus: awarded[0]?.title?.slice(0, 80),
+      source: 'NIH RePORTER awardee',
+      evidence: awarded.map(g => `NIH award ${g.projectNumber}${g.awardAmount ? ` ($${g.awardAmount.toLocaleString()})` : ''}`).slice(0, 25)
+    })).filter(c => c.substances.length > 0);
+  }
+
+  /** Form D filers surfaced by substance full-text search (vehicles excluded) */
+  private fromFundingFilers(events: FundingEvent[]): Candidate[] {
+    const byName = new Map<string, { name: string; cik?: string; events: FundingEvent[] }>();
+    for (const event of events) {
+      if (!event.matchedTerms?.length) continue; // only filers found by sector search, not ones we already track
+      if (VEHICLE_NAME.test(event.companyName)) continue;
+      const key = normalizeCompanyName(event.companyName);
+      if (!key) continue;
+      const entry = byName.get(key) ?? { name: cleanDisplayName(event.companyName), cik: event.cik, events: [] };
+      entry.events.push(event);
+      byName.set(key, entry);
+    }
+    return Array.from(byName.values()).map(({ name, cik, events: filed }) => ({
+      name,
+      cik: cik ? padCik(cik) : undefined,
+      substances: Array.from(new Set(filed.flatMap(f => f.substances ?? []))).filter(s => s !== 'Other') as Substance[],
+      type: 'Biotech' as const,
+      stage: 'Private' as const,
+      source: 'SEC Form D filer',
+      evidence: filed.map(f => `Form ${f.formType} filed ${f.filedAt}${f.totalAmountSold ? ` ($${f.totalAmountSold.toLocaleString()} sold)` : ''}`).slice(0, 10)
+    })).filter(c => c.substances.length > 0);
+  }
+
+  /**
+   * Companies named in sector headlines: "X Therapeutics", "X Pharmaceuticals",
+   * "X Biosciences", ... that recur across at least three distinct headlines.
+   * Public ones get their CIK from the SEC name map during enrichment.
+   */
+  private fromNewsMentions(news: NewsItem[]): Candidate[] {
+    const byName = new Map<string, { name: string; titles: Set<string>; substances: Set<Substance> }>();
+    for (const item of news) {
+      if (item.category !== 'News') continue;
+      for (const match of item.title.matchAll(NEWS_COMPANY_PATTERN)) {
+        const name = cleanText(match[0]) || '';
+        if (name.split(' ').length > 5 || VEHICLE_NAME.test(name)) continue;
+        const key = normalizeCompanyName(name);
+        if (!key || key.length < 5) continue;
+        const entry = byName.get(key) ?? { name, titles: new Set<string>(), substances: new Set<Substance>() };
+        entry.titles.add(item.title);
+        for (const s of item.substances) entry.substances.add(s);
+        byName.set(key, entry);
+      }
+    }
+    return Array.from(byName.values())
+      .filter(e => e.titles.size >= 3)
+      .map(e => ({
+        name: e.name,
+        substances: Array.from(e.substances).filter(s => s !== 'Other') as Substance[],
+        type: 'Biotech' as const,
+        stage: 'Private' as const,
+        source: 'News coverage',
+        evidence: Array.from(e.titles).slice(0, 5).map(t => `Headline: ${t.slice(0, 100)}`)
+      }))
+      .filter(c => c.substances.length > 0);
   }
 
   /**

@@ -110,6 +110,9 @@ docker run -e DATABASE_URL=postgres://... -e RUN_ON_START=true neuly npm run sch
 - [ ] Create an API key on a Pro account, call `https://<domain>/api/v1/clinical-trials?limit=1` with it, and see `X-RateLimit-*` headers
 - [ ] `/docs` and `/api/openapi.json` render; share one dataset publicly and open its link signed out
 - [ ] Forgot-password email arrives (Resend) and the link on `/reset-password` works
+- [ ] Signed out: the home page renders; clicking Companies prompts for an account; `/care/<id>` shows the summary with a sign-up gate
+- [ ] Signed in: submit a "Request information" on a care provider, claim that listing from a second account, approve it in `/admin` → Partners & leads, see the masked inquiry in `/partners`, unlock it (Stripe test mode) and see the contact details
+- [ ] Open a headline from Industry Live: it lands on `/news/<id>` and "Read the full report" shows the leaving-Neuly modal
 
 ## What shipped in the launch-readiness pass
 
@@ -192,6 +195,54 @@ docker run -e DATABASE_URL=postgres://... -e RUN_ON_START=true neuly npm run sch
   Datasets pages, pricing page, forgot-password flow, study-type filter and
   results/observational chips on Studies, SEC-sourced leadership on company
   profiles, toasts.
+
+## What shipped in the marketplace pass
+
+- **A page for everything** — every item in the live feed now has its own
+  URL on Neuly that summarises the record and links out:
+  `/news/:id` (headlines and SEC filings), `/bills/:id`, `/funding/:id`,
+  `/grants/:id`, `/papers/:id`, `/jobs/:id`, `/events/:id`, `/care/:id`,
+  `/people/:id`, alongside `/trials/:nctId`, `/company-profiles/:slug`,
+  `/substances/:slug`, `/policy/:jurisdiction`. All are in the sitemap.
+- **Leaving-Neuly interstitial** — every outbound link in the app and on the
+  server-rendered pages opens a confirmation modal first. Signed-out
+  visitors are asked to create an account before continuing.
+- **Members only** — the front page, pricing, partner page and shared
+  datasets are public. Everything else (live feed, every list, every record,
+  search) requires an account: anonymous API calls get a 6-row preview per
+  list and `401` on records; the app prompts sign-up on any gated page;
+  server pages show a summary and gate the rest.
+- **Care directory is live data** — the Care page renders the crawled
+  `care_providers` table (state-licensed centers + curated clinics) instead
+  of a hardcoded list, with "Request information" on every provider.
+- **Lead capture** — "Request information" (care) and "I'm interested"
+  (recruiting studies) collect name, contact, condition and consent into
+  `leads`; the partner is emailed (masked) and so is the operator. Every
+  signed-in look at a provider, study, company or person is logged in
+  `entity_views` — the activity log partners see.
+- **Partner portal** (`/partners`) — institutions claim a listing (care
+  provider, study by NCT id/sponsor, or company); admins approve and can set
+  a per-listing price. Approved partners see views, unique viewers, viewer
+  segments, and their inquiries with contact details masked until unlocked.
+  Unlocking is a one-off Stripe Checkout (`metadata.kind = lead_unlock`,
+  default $49 care / $149 study participant / $99 company, see
+  `LEAD_PRICE_*`); admins can comp a lead. Revenue, claims and leads are in
+  the admin console's **Partners & leads** tab.
+- **More exhaustive companies** — beyond the curated list, trial sponsors and
+  EDGAR full-text search, the companies crawl now adds corporate trial
+  collaborators, NIH awardee companies (SBIR/STTR), Form D filers found by
+  sector search, and companies named in 3+ sector headlines, each with
+  evidence; EDGAR terms and lookup caps were widened.
+- **More exhaustive people** — SEC ownership coverage now spans three years
+  and 40 filings per company (every director and Section 16 officer files a
+  Form 3 on appointment, so this is near-complete for public companies);
+  company websites' leadership/team pages are parsed for private companies
+  and the full management team (name, title, headshot), with the page URL as
+  evidence. JavaScript-only sites yield nothing — expected and logged.
+- **Headshots** — a daily enrichment finds freely licensed photos on
+  Wikidata/Wikimedia Commons (verified human + role-matching description),
+  plus images from company team pages; people without one get an initials
+  avatar. Attribution is stored and shown on the person page.
 
 ## Known post-launch work (in priority order)
 
