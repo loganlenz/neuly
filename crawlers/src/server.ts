@@ -28,12 +28,14 @@ import {
   CareProvider,
   NewsItem,
   MarketQuote,
-  EducationalResource,
-  Substance,
   SUBSTANCES
 } from './models/types.js';
 import { deriveReadoutCalendar } from './core/readouts.js';
 import { LiveHub, buildFreshness } from './web/liveHub.js';
+import { adminRouter } from './admin/admin.js';
+import { datasetsRouter } from './datasets/datasets.js';
+import { versionAlias, apiTrafficPolicy, publicApiRouter, listResponse, API_VERSION } from './web/publicApi.js';
+import { appDbAvailable, getAppDb } from './db/appDb.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -43,19 +45,46 @@ const PORT = process.env.PORT || 3001;
 const storage = await createStorage();
 const liveHub = new LiveHub(storage);
 
-// Middleware. credentials:true + reflected origin lets a statically hosted
-// frontend on another domain carry the session cookie to this API.
-app.use(cors({ origin: true, credentials: true }));
+// Behind Render's proxy: req.ip and req.secure reflect the client
+app.set('trust proxy', 1);
+app.disable('x-powered-by');
+
+// Security headers (no helmet dependency needed for this surface)
+app.use((req: Request, res: Response, next: NextFunction) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  if (process.env.NODE_ENV === 'production' && req.secure) {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
+  next();
+});
+
+// CORS. CORS_ORIGINS (comma separated) pins the allowed browser origins in
+// production; unset, every origin is reflected so a statically hosted
+// frontend works out of the box. API-key clients are unaffected either way.
+const allowedOrigins = (process.env.CORS_ORIGINS ?? '').split(',').map(s => s.trim()).filter(Boolean);
+app.use(cors({
+  origin: allowedOrigins.length > 0
+    ? (origin, callback) => callback(null, !origin || allowedOrigins.includes(origin))
+    : true,
+  credentials: true,
+  exposedHeaders: ['X-RateLimit-Limit', 'X-RateLimit-Remaining', 'X-RateLimit-Reset', 'X-Neuly-Rows', 'Retry-After']
+}));
+
 // Stripe webhook needs the raw bytes for signature verification, so it is
 // mounted before the JSON body parser.
 app.post('/api/billing/webhook', express.raw({ type: 'application/json' }), handleStripeWebhook);
-app.use(express.json());
+app.use(express.json({ limit: '256kb' }));
+app.use(versionAlias());
 app.use(attachUser());
+app.use(apiTrafficPolicy());
 
 // Serve the frontend (index.html) from the project root
 const projectRoot = join(__dirname, '..', '..');
 if (existsSync(join(projectRoot, 'index.html'))) {
-  app.use(express.static(projectRoot));
+  app.use(express.static(projectRoot, { index: false }));
 }
 
 // Request logging (skip static files)
@@ -93,13 +122,52 @@ function authorMatches(stored: string, wanted: { first?: string; last?: string }
 }
 
 /**
- * Health check endpoint
+ * Leadership for a company: people the SEC filings (or curation) link to
+ * it. Officers first, then directors, then everyone else.
  */
-app.get('/api/health', (_req: Request, res: Response) => {
-  res.json({
-    status: 'ok',
+function leadershipFor(company: Company, people: Person[]): Company['leadership'] {
+  const linked = people.filter(p => p.companyIds?.includes(company.id));
+  if (linked.length === 0) return company.leadership;
+  const rank = (p: Person) => {
+    const aff = p.affiliations?.find(a => a.companyId === company.id);
+    const role = (aff?.role ?? p.title ?? '').toLowerCase();
+    if (/chief executive|\bceo\b|president|founder/.test(role)) return 0;
+    if (/chief|officer|\bcfo\b|\bcmo\b|\bcoo\b|\bcso\b/.test(role)) return 1;
+    if (/director|board/.test(role)) return 2;
+    return 3;
+  };
+  const fromPeople = linked
+    .sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name))
+    .map(p => ({
+      name: p.name,
+      title: p.affiliations?.find(a => a.companyId === company.id)?.role ?? p.title ?? 'Executive',
+      personId: p.id,
+      source: p.affiliations?.find(a => a.companyId === company.id)?.source
+    }));
+  const seen = new Set(fromPeople.map(l => l.name.toLowerCase()));
+  const curated = (company.leadership ?? []).filter(l => !seen.has(l.name.toLowerCase()));
+  return [...fromPeople, ...curated] as Company['leadership'];
+}
+
+/**
+ * Health check endpoint (includes the database when configured)
+ */
+app.get('/api/health', async (_req: Request, res: Response) => {
+  let database: 'ok' | 'error' | 'not-configured' = 'not-configured';
+  if (appDbAvailable()) {
+    try {
+      await getAppDb().query('SELECT 1');
+      database = 'ok';
+    } catch {
+      database = 'error';
+    }
+  }
+  res.status(database === 'error' ? 503 : 200).json({
+    status: database === 'error' ? 'degraded' : 'ok',
     timestamp: new Date().toISOString(),
-    version: '1.0.0'
+    version: API_VERSION,
+    storage: storage.label.split(':')[0],
+    database
   });
 });
 
@@ -128,49 +196,7 @@ app.get('/api/stats', async (_req: Request, res: Response) => {
 app.get('/api/clinical-trials', async (req: Request, res: Response) => {
   try {
     const trials = await storage.load<ClinicalTrial>('clinical_trials');
-
-    // Apply filters
-    let filtered = trials;
-
-    if (req.query.substance) {
-      const substance = req.query.substance as string;
-      filtered = filtered.filter(t =>
-        t.substances.some(s => s.toLowerCase().includes(substance.toLowerCase()))
-      );
-    }
-
-    if (req.query.status) {
-      const status = req.query.status as string;
-      filtered = filtered.filter(t => t.status.toLowerCase() === status.toLowerCase());
-    }
-
-    if (req.query.phase) {
-      const phase = req.query.phase as string;
-      filtered = filtered.filter(t => t.phase?.toLowerCase().includes(phase.toLowerCase()));
-    }
-
-    if (req.query.search) {
-      const search = (req.query.search as string).toLowerCase();
-      filtered = filtered.filter(t =>
-        t.title.toLowerCase().includes(search) ||
-        t.briefSummary?.toLowerCase().includes(search) ||
-        t.conditions.some(c => c.toLowerCase().includes(search))
-      );
-    }
-
-    // Pagination
-    const page = parseInt(req.query.page as string) || 1;
-    const limit = parseInt(req.query.limit as string) || 50;
-    const start = (page - 1) * limit;
-    const paginated = filtered.slice(start, start + limit);
-
-    res.json({
-      data: paginated,
-      total: filtered.length,
-      page,
-      limit,
-      totalPages: Math.ceil(filtered.length / limit)
-    });
+    res.json(listResponse('clinical_trials', trials, req.query as Record<string, unknown>));
   } catch (error) {
     logger.error(`Error fetching clinical trials: ${error}`);
     res.status(500).json({ error: 'Failed to fetch clinical trials' });
@@ -180,7 +206,8 @@ app.get('/api/clinical-trials', async (req: Request, res: Response) => {
 app.get('/api/clinical-trials/:id', async (req: Request, res: Response) => {
   try {
     const trials = await storage.load<ClinicalTrial>('clinical_trials');
-    const trial = trials.find(t => t.id === req.params.id || t.nctId === req.params.id);
+    const wanted = req.params.id.toLowerCase();
+    const trial = trials.find(t => t.id === req.params.id || t.nctId.toLowerCase() === wanted);
 
     if (!trial) {
       return res.status(404).json({ error: 'Clinical trial not found' });
@@ -199,66 +226,26 @@ app.get('/api/clinical-trials/:id', async (req: Request, res: Response) => {
 app.get('/api/research', async (req: Request, res: Response) => {
   try {
     const papers = await storage.load<ResearchPaper>('research_papers');
-
-    let filtered = papers;
-
-    if (req.query.substance) {
-      const substance = req.query.substance as string;
-      filtered = filtered.filter(p =>
-        p.substances.some(s => s.toLowerCase().includes(substance.toLowerCase()))
-      );
-    }
-
-    if (req.query.year) {
-      const year = parseInt(req.query.year as string);
-      filtered = filtered.filter(p => p.year === year);
-    }
+    const query = { ...(req.query as Record<string, unknown>) };
 
     // author=Robin Carhart-Harris — matches "Carhart-Harris R", "Robin Carhart-Harris", etc.
-    if (req.query.author) {
-      const wanted = normalizeAuthor(req.query.author as string);
-      if (wanted.last) {
-        filtered = filtered.filter(p => p.authors.some(a => authorMatches(a.name, wanted)));
-      }
+    let rows: ResearchPaper[] = papers;
+    if (typeof query.author === 'string') {
+      const wanted = normalizeAuthor(query.author);
+      if (wanted.last) rows = rows.filter(p => p.authors.some(a => authorMatches(a.name, wanted)));
+      delete query.author;
     }
 
-    if (req.query.type === 'preprint') {
-      filtered = filtered.filter(p => p.publicationType?.includes('Preprint'));
-    } else if (req.query.type === 'peer-reviewed') {
-      filtered = filtered.filter(p => !p.publicationType?.includes('Preprint'));
-    }
-
-    if (req.query.search) {
-      const search = (req.query.search as string).toLowerCase();
-      const words = search.split(/\s+/).filter(w => w.length > 1);
-      filtered = filtered.filter(p => {
-        const haystack = `${p.title} ${p.abstract || ''} ${p.journal || ''} ${p.authors.map(a => a.name).join(' ')} ${(p.keywords || []).join(' ')}`.toLowerCase();
-        return words.length > 0 ? words.every(w => haystack.includes(w)) : haystack.includes(search);
-      });
-    }
-
-    // Sort newest first (date, then year)
-    filtered.sort((a, b) => (b.publicationDate || `${b.year || 0}`).localeCompare(a.publicationDate || `${a.year || 0}`));
-
-    // Pagination
-    const page = parseInt(req.query.page as string) || 1;
-    const limit = Math.min(parseInt(req.query.limit as string) || 50, 500);
-    const start = (page - 1) * limit;
     // Abstracts dominate payload size; list responses carry a preview unless full=1
-    const full = req.query.full === '1' || req.query.full === 'true';
-    const paginated = filtered.slice(start, start + limit).map(p =>
-      full || !p.abstract || p.abstract.length <= 400
-        ? p
-        : { ...p, abstract: `${p.abstract.slice(0, 400).trimEnd()}…` }
-    );
-
-    res.json({
-      data: paginated,
-      total: filtered.length,
-      page,
-      limit,
-      totalPages: Math.ceil(filtered.length / limit)
-    });
+    const full = query.full === '1' || query.full === 'true';
+    res.json(listResponse('research_papers', rows, query, {
+      map: row => {
+        const p = row as ResearchPaper;
+        return full || !p.abstract || p.abstract.length <= 400
+          ? p
+          : { ...p, abstract: `${p.abstract.slice(0, 400).trimEnd()}…` };
+      }
+    }));
   } catch (error) {
     logger.error(`Error fetching research papers: ${error}`);
     res.status(500).json({ error: 'Failed to fetch research papers' });
@@ -268,7 +255,7 @@ app.get('/api/research', async (req: Request, res: Response) => {
 app.get('/api/research/:id', async (req: Request, res: Response) => {
   try {
     const papers = await storage.load<ResearchPaper>('research_papers');
-    const paper = papers.find(p => p.id === req.params.id || p.pmid === req.params.id);
+    const paper = papers.find(p => p.id === req.params.id || p.pmid === req.params.id || p.doi === req.params.id);
 
     if (!paper) {
       return res.status(404).json({ error: 'Research paper not found' });
@@ -286,49 +273,16 @@ app.get('/api/research/:id', async (req: Request, res: Response) => {
 
 app.get('/api/companies', async (req: Request, res: Response) => {
   try {
-    const companies = await storage.load<Company>('companies');
-
-    let filtered = companies;
-
-    if (req.query.type) {
-      const type = req.query.type as string;
-      filtered = filtered.filter(c => c.type.toLowerCase() === type.toLowerCase());
-    }
-
-    if (req.query.stage) {
-      const stage = req.query.stage as string;
-      filtered = filtered.filter(c => c.stage.toLowerCase() === stage.toLowerCase());
-    }
-
-    if (req.query.substance) {
-      const substance = req.query.substance as string;
-      filtered = filtered.filter(c =>
-        c.substances.some(s => s.toLowerCase().includes(substance.toLowerCase()))
-      );
-    }
-
-    if (req.query.search) {
-      const search = (req.query.search as string).toLowerCase();
-      filtered = filtered.filter(c =>
-        c.name.toLowerCase().includes(search) ||
-        c.description?.toLowerCase().includes(search) ||
-        c.focus?.toLowerCase().includes(search)
-      );
-    }
-
-    // Pagination
-    const page = parseInt(req.query.page as string) || 1;
-    const limit = parseInt(req.query.limit as string) || 50;
-    const start = (page - 1) * limit;
-    const paginated = filtered.slice(start, start + limit);
-
-    res.json({
-      data: paginated,
-      total: filtered.length,
-      page,
-      limit,
-      totalPages: Math.ceil(filtered.length / limit)
-    });
+    const [companies, people] = await Promise.all([
+      storage.load<Company>('companies'),
+      storage.load<Person>('people')
+    ]);
+    res.json(listResponse('companies', companies, req.query as Record<string, unknown>, {
+      map: row => {
+        const c = row as Company;
+        return { ...c, leadership: leadershipFor(c, people) };
+      }
+    }));
   } catch (error) {
     logger.error(`Error fetching companies: ${error}`);
     res.status(500).json({ error: 'Failed to fetch companies' });
@@ -337,14 +291,29 @@ app.get('/api/companies', async (req: Request, res: Response) => {
 
 app.get('/api/companies/:id', async (req: Request, res: Response) => {
   try {
-    const companies = await storage.load<Company>('companies');
-    const company = companies.find(c => c.id === req.params.id || c.ticker === req.params.id);
+    const [companies, people, trials, jobs, funding] = await Promise.all([
+      storage.load<Company>('companies'),
+      storage.load<Person>('people'),
+      storage.load<ClinicalTrial>('clinical_trials'),
+      storage.load<JobPosting>('jobs'),
+      storage.load<FundingEvent>('funding_events')
+    ]);
+    const wanted = req.params.id.toLowerCase();
+    const company = companies.find(c => c.id === req.params.id || c.ticker?.toLowerCase() === wanted);
 
     if (!company) {
       return res.status(404).json({ error: 'Company not found' });
     }
 
-    res.json(company);
+    const nameLc = company.name.toLowerCase();
+    res.json({
+      ...company,
+      leadership: leadershipFor(company, people),
+      people: people.filter(p => p.companyIds?.includes(company.id)),
+      trials: trials.filter(t => t.sponsor?.toLowerCase().includes(nameLc) || t.collaborators?.some(c => c.toLowerCase().includes(nameLc))).slice(0, 50),
+      jobs: jobs.filter(j => j.company.toLowerCase() === nameLc || j.companyId === company.id).slice(0, 50),
+      fundingEvents: funding.filter(f => (company.cik && f.cik && f.cik.replace(/^0+/, '') === company.cik.replace(/^0+/, '')) || f.companyName.toLowerCase() === nameLc)
+    });
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch company' });
   }
@@ -357,46 +326,7 @@ app.get('/api/companies/:id', async (req: Request, res: Response) => {
 app.get('/api/people', async (req: Request, res: Response) => {
   try {
     const people = await storage.load<Person>('people');
-
-    let filtered = people;
-
-    if (req.query.role) {
-      const role = req.query.role as string;
-      filtered = filtered.filter(p => p.role.toLowerCase() === role.toLowerCase());
-    }
-
-    if (req.query.expertise) {
-      const expertise = req.query.expertise as string;
-      filtered = filtered.filter(p =>
-        p.expertise?.some(e => e.toLowerCase().includes(expertise.toLowerCase()))
-      );
-    }
-
-    if (req.query.search) {
-      const search = (req.query.search as string).toLowerCase();
-      filtered = filtered.filter(p =>
-        p.name.toLowerCase().includes(search) ||
-        p.organization?.toLowerCase().includes(search) ||
-        p.bio?.toLowerCase().includes(search)
-      );
-    }
-
-    // Sort by publication count (researchers first)
-    filtered.sort((a, b) => (b.publications?.count || 0) - (a.publications?.count || 0));
-
-    // Pagination
-    const page = parseInt(req.query.page as string) || 1;
-    const limit = parseInt(req.query.limit as string) || 50;
-    const start = (page - 1) * limit;
-    const paginated = filtered.slice(start, start + limit);
-
-    res.json({
-      data: paginated,
-      total: filtered.length,
-      page,
-      limit,
-      totalPages: Math.ceil(filtered.length / limit)
-    });
+    res.json(listResponse('people', people, req.query as Record<string, unknown>));
   } catch (error) {
     logger.error(`Error fetching people: ${error}`);
     res.status(500).json({ error: 'Failed to fetch people' });
@@ -405,14 +335,20 @@ app.get('/api/people', async (req: Request, res: Response) => {
 
 app.get('/api/people/:id', async (req: Request, res: Response) => {
   try {
-    const people = await storage.load<Person>('people');
+    const [people, companies] = await Promise.all([
+      storage.load<Person>('people'),
+      storage.load<Company>('companies')
+    ]);
     const person = people.find(p => p.id === req.params.id);
 
     if (!person) {
       return res.status(404).json({ error: 'Person not found' });
     }
 
-    res.json(person);
+    res.json({
+      ...person,
+      companies: companies.filter(c => person.companyIds?.includes(c.id)).map(c => ({ id: c.id, name: c.name, ticker: c.ticker, type: c.type, stage: c.stage }))
+    });
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch person' });
   }
@@ -425,52 +361,7 @@ app.get('/api/people/:id', async (req: Request, res: Response) => {
 app.get('/api/jobs', async (req: Request, res: Response) => {
   try {
     const jobs = await storage.load<JobPosting>('jobs');
-
-    let filtered = jobs;
-
-    if (req.query.type) {
-      const type = req.query.type as string;
-      filtered = filtered.filter(j => j.type.toLowerCase() === type.toLowerCase());
-    }
-
-    if (req.query.company) {
-      const company = req.query.company as string;
-      filtered = filtered.filter(j => j.company.toLowerCase().includes(company.toLowerCase()));
-    }
-
-    if (req.query.remote) {
-      filtered = filtered.filter(j => j.location?.remote === true);
-    }
-
-    if (req.query.search) {
-      const search = (req.query.search as string).toLowerCase();
-      filtered = filtered.filter(j =>
-        j.title.toLowerCase().includes(search) ||
-        j.company.toLowerCase().includes(search) ||
-        j.description?.toLowerCase().includes(search)
-      );
-    }
-
-    // Sort by date (newest first)
-    filtered.sort((a, b) => {
-      const dateA = a.postedDate ? new Date(a.postedDate).getTime() : 0;
-      const dateB = b.postedDate ? new Date(b.postedDate).getTime() : 0;
-      return dateB - dateA;
-    });
-
-    // Pagination
-    const page = parseInt(req.query.page as string) || 1;
-    const limit = parseInt(req.query.limit as string) || 50;
-    const start = (page - 1) * limit;
-    const paginated = filtered.slice(start, start + limit);
-
-    res.json({
-      data: paginated,
-      total: filtered.length,
-      page,
-      limit,
-      totalPages: Math.ceil(filtered.length / limit)
-    });
+    res.json(listResponse('jobs', jobs, req.query as Record<string, unknown>));
   } catch (error) {
     logger.error(`Error fetching jobs: ${error}`);
     res.status(500).json({ error: 'Failed to fetch jobs' });
@@ -499,49 +390,7 @@ app.get('/api/jobs/:id', async (req: Request, res: Response) => {
 app.get('/api/events', async (req: Request, res: Response) => {
   try {
     const events = await storage.load<Event>('events');
-
-    let filtered = events;
-
-    if (req.query.type) {
-      const type = req.query.type as string;
-      filtered = filtered.filter(e => e.type.toLowerCase() === type.toLowerCase());
-    }
-
-    if (req.query.format) {
-      const format = req.query.format as string;
-      filtered = filtered.filter(e => e.format.toLowerCase() === format.toLowerCase());
-    }
-
-    if (req.query.upcoming === 'true') {
-      const now = new Date();
-      filtered = filtered.filter(e => new Date(e.startDate) >= now);
-    }
-
-    if (req.query.search) {
-      const search = (req.query.search as string).toLowerCase();
-      filtered = filtered.filter(e =>
-        e.title.toLowerCase().includes(search) ||
-        e.description?.toLowerCase().includes(search) ||
-        e.organizer?.toLowerCase().includes(search)
-      );
-    }
-
-    // Sort by date (soonest first)
-    filtered.sort((a, b) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime());
-
-    // Pagination
-    const page = parseInt(req.query.page as string) || 1;
-    const limit = parseInt(req.query.limit as string) || 50;
-    const start = (page - 1) * limit;
-    const paginated = filtered.slice(start, start + limit);
-
-    res.json({
-      data: paginated,
-      total: filtered.length,
-      page,
-      limit,
-      totalPages: Math.ceil(filtered.length / limit)
-    });
+    res.json(listResponse('events', events, req.query as Record<string, unknown>));
   } catch (error) {
     logger.error(`Error fetching events: ${error}`);
     res.status(500).json({ error: 'Failed to fetch events' });
@@ -569,40 +418,8 @@ app.get('/api/events/:id', async (req: Request, res: Response) => {
 
 app.get('/api/education', async (req: Request, res: Response) => {
   try {
-    // Curated rows carry a few display fields beyond the schema (level,
-    // category, price string); read them loosely.
-    type CourseRow = EducationalResource & Record<string, string | undefined>;
-    const courses = (await storage.load<EducationalResource>('educational_resources')) as unknown as CourseRow[];
-    let filtered = courses;
-
-    if (req.query.level) {
-      const level = (req.query.level as string).toLowerCase();
-      filtered = filtered.filter(c => c.level?.toLowerCase() === level);
-    }
-    if (req.query.category) {
-      const category = (req.query.category as string).toLowerCase();
-      filtered = filtered.filter(c => c.category?.toLowerCase() === category);
-    }
-    if (req.query.search) {
-      const search = (req.query.search as string).toLowerCase();
-      filtered = filtered.filter(c =>
-        c.title?.toLowerCase().includes(search) ||
-        c.provider?.toLowerCase().includes(search) ||
-        c.description?.toLowerCase().includes(search)
-      );
-    }
-
-    const page = parseInt(req.query.page as string) || 1;
-    const limit = parseInt(req.query.limit as string) || 50;
-    const start = (page - 1) * limit;
-
-    res.json({
-      data: filtered.slice(start, start + limit),
-      total: filtered.length,
-      page,
-      limit,
-      totalPages: Math.ceil(filtered.length / limit)
-    });
+    const courses = await storage.load('educational_resources');
+    res.json(listResponse('educational_resources', courses, req.query as Record<string, unknown>));
   } catch (error) {
     logger.error(`Error fetching educational resources: ${error}`);
     res.status(500).json({ error: 'Failed to fetch educational resources' });
@@ -620,51 +437,7 @@ app.get('/api/education', async (req: Request, res: Response) => {
 app.get('/api/care', async (req: Request, res: Response) => {
   try {
     const providers = await storage.load<CareProvider>('care_providers');
-    let filtered = providers;
-
-    if (req.query.type) {
-      const type = (req.query.type as string).toLowerCase();
-      filtered = filtered.filter(p => p.type.toLowerCase() === type);
-    }
-    if (req.query.state) {
-      const state = (req.query.state as string).toLowerCase();
-      filtered = filtered.filter(p => p.location?.state?.toLowerCase() === state);
-    }
-    if (req.query.country) {
-      const country = (req.query.country as string).toLowerCase();
-      filtered = filtered.filter(p => p.location?.country?.toLowerCase() === country);
-    }
-    if (req.query.substance) {
-      const substance = (req.query.substance as string).toLowerCase();
-      filtered = filtered.filter(p => p.substances.some(s => s.toLowerCase().includes(substance)));
-    }
-    if (req.query.verified === 'true') {
-      filtered = filtered.filter(p => p.verified);
-    }
-    if (req.query.search) {
-      const search = (req.query.search as string).toLowerCase();
-      filtered = filtered.filter(p =>
-        p.name.toLowerCase().includes(search) ||
-        p.description?.toLowerCase().includes(search) ||
-        p.location?.city?.toLowerCase().includes(search) ||
-        p.services?.some(s => s.toLowerCase().includes(search))
-      );
-    }
-
-    // Licensed / verified rows first, then alphabetical
-    filtered.sort((a, b) => Number(b.verified) - Number(a.verified) || a.name.localeCompare(b.name));
-
-    const page = parseInt(req.query.page as string) || 1;
-    const limit = parseInt(req.query.limit as string) || 50;
-    const start = (page - 1) * limit;
-
-    res.json({
-      data: filtered.slice(start, start + limit),
-      total: filtered.length,
-      page,
-      limit,
-      totalPages: Math.ceil(filtered.length / limit)
-    });
+    res.json(listResponse('care_providers', providers, req.query as Record<string, unknown>));
   } catch (error) {
     logger.error(`Error fetching care providers: ${error}`);
     res.status(500).json({ error: 'Failed to fetch care providers' });
@@ -734,10 +507,14 @@ app.get('/api/dashboard', async (_req: Request, res: Response) => {
     res.json({
       counts: {
         clinicalTrials: trials.length,
+        interventionalTrials: trials.filter(t => t.studyType === 'INTERVENTIONAL').length,
+        observationalStudies: trials.filter(t => t.studyType === 'OBSERVATIONAL').length,
+        trialsWithResults: trials.filter(t => t.hasResults).length,
         researchPapers: papers.length,
         preprints: papers.filter(p => p.publicationType?.includes('Preprint')).length,
         companies: companies.length,
         people: people.length,
+        executives: people.filter(p => p.role === 'Executive').length,
         jobs: jobs.length,
         events: events.length,
         educationalResources: education.length,
@@ -754,7 +531,7 @@ app.get('/api/dashboard', async (_req: Request, res: Response) => {
       upcomingEvents,
       recentJobs,
       substanceStats,
-      featuredCompanies: companies.slice(0, 6),
+      featuredCompanies: companies.slice(0, 6).map(c => ({ ...c, leadership: leadershipFor(c, people) })),
       featuredPeople: people.slice(0, 6)
     });
   } catch (error) {
@@ -806,7 +583,8 @@ app.get('/api/search', async (req: Request, res: Response) => {
       ).slice(0, 10),
       clinicalTrials: trials.filter(t =>
         t.title.toLowerCase().includes(query) ||
-        t.briefSummary?.toLowerCase().includes(query)
+        t.briefSummary?.toLowerCase().includes(query) ||
+        t.nctId.toLowerCase() === query
       ).slice(0, 10),
       researchPapers: papers.filter(p =>
         p.title.toLowerCase().includes(query) ||
@@ -814,11 +592,13 @@ app.get('/api/search', async (req: Request, res: Response) => {
       ).slice(0, 10),
       companies: companies.filter(c =>
         c.name.toLowerCase().includes(query) ||
-        c.description?.toLowerCase().includes(query)
+        c.description?.toLowerCase().includes(query) ||
+        c.ticker?.toLowerCase() === query
       ).slice(0, 10),
       people: people.filter(p =>
         p.name.toLowerCase().includes(query) ||
-        p.organization?.toLowerCase().includes(query)
+        p.organization?.toLowerCase().includes(query) ||
+        p.title?.toLowerCase().includes(query)
       ).slice(0, 10),
       jobs: jobs.filter(j =>
         j.title.toLowerCase().includes(query) ||
@@ -838,7 +618,7 @@ app.get('/api/search', async (req: Request, res: Response) => {
 });
 
 // ============================================
-// ACCOUNTS, ALERTS, BILLING, SEO PAGES
+// ACCOUNTS, DATASETS, ALERTS, BILLING, ADMIN, SEO PAGES, PUBLIC API DOCS
 // ============================================
 
 app.use('/api/auth', authRouter());
@@ -846,6 +626,9 @@ app.use('/api/keys', apiKeysRouter());
 app.use('/api/saves', savesRouter());
 app.use('/api/alerts', alertsRouter());
 app.use('/api/billing', billingRouter());
+app.use('/api/datasets', datasetsRouter(storage));
+app.use('/api/admin', adminRouter(storage));
+app.use(publicApiRouter(storage));
 app.use(seoRouter(storage));
 
 /**
@@ -878,41 +661,21 @@ app.get('/api/export/:type', requirePlan('pro', 'enterprise'), async (req: Authe
 app.get('/api/legislation', async (req: Request, res: Response) => {
   try {
     const bills = await storage.load<LegislationBill>('legislation');
-    let filtered = bills;
-
-    if (req.query.jurisdiction) {
-      const jurisdiction = (req.query.jurisdiction as string).toLowerCase();
-      filtered = filtered.filter(b => b.jurisdiction.toLowerCase() === jurisdiction);
-    }
-    if (req.query.substance) {
-      const substance = (req.query.substance as string).toLowerCase();
-      filtered = filtered.filter(b => b.substances.some(s => s.toLowerCase().includes(substance)));
-    }
-    if (req.query.search) {
-      const search = (req.query.search as string).toLowerCase();
-      filtered = filtered.filter(b =>
-        b.title.toLowerCase().includes(search) ||
-        b.description?.toLowerCase().includes(search) ||
-        b.billNumber.toLowerCase().includes(search)
-      );
-    }
-
-    filtered.sort((a, b) => (b.lastActionDate || '').localeCompare(a.lastActionDate || ''));
-
-    const page = parseInt(req.query.page as string) || 1;
-    const limit = parseInt(req.query.limit as string) || 50;
-    const start = (page - 1) * limit;
-
-    res.json({
-      data: filtered.slice(start, start + limit),
-      total: filtered.length,
-      page,
-      limit,
-      totalPages: Math.ceil(filtered.length / limit)
-    });
+    res.json(listResponse('legislation', bills, req.query as Record<string, unknown>));
   } catch (error) {
     logger.error(`Error fetching legislation: ${error}`);
     res.status(500).json({ error: 'Failed to fetch legislation' });
+  }
+});
+
+app.get('/api/legislation/:id', async (req: Request, res: Response) => {
+  try {
+    const bills = await storage.load<LegislationBill>('legislation');
+    const bill = bills.find(b => b.id === req.params.id);
+    if (!bill) return res.status(404).json({ error: 'Bill not found' });
+    res.json(bill);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch bill' });
   }
 });
 
@@ -923,33 +686,21 @@ app.get('/api/legislation', async (req: Request, res: Response) => {
 app.get('/api/funding', async (req: Request, res: Response) => {
   try {
     const events = await storage.load<FundingEvent>('funding_events');
-    let filtered = events;
-
-    if (req.query.search) {
-      const search = (req.query.search as string).toLowerCase();
-      filtered = filtered.filter(f => f.companyName.toLowerCase().includes(search));
-    }
-    if (req.query.since) {
-      const since = req.query.since as string;
-      filtered = filtered.filter(f => f.filedAt >= since);
-    }
-
-    filtered.sort((a, b) => b.filedAt.localeCompare(a.filedAt));
-
-    const page = parseInt(req.query.page as string) || 1;
-    const limit = parseInt(req.query.limit as string) || 50;
-    const start = (page - 1) * limit;
-
-    res.json({
-      data: filtered.slice(start, start + limit),
-      total: filtered.length,
-      page,
-      limit,
-      totalPages: Math.ceil(filtered.length / limit)
-    });
+    res.json(listResponse('funding_events', events, req.query as Record<string, unknown>));
   } catch (error) {
     logger.error(`Error fetching funding events: ${error}`);
     res.status(500).json({ error: 'Failed to fetch funding events' });
+  }
+});
+
+app.get('/api/funding/:id', async (req: Request, res: Response) => {
+  try {
+    const events = await storage.load<FundingEvent>('funding_events');
+    const event = events.find(f => f.id === req.params.id || f.accessionNumber === req.params.id);
+    if (!event) return res.status(404).json({ error: 'Funding event not found' });
+    res.json(event);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch funding event' });
   }
 });
 
@@ -960,41 +711,21 @@ app.get('/api/funding', async (req: Request, res: Response) => {
 app.get('/api/grants', async (req: Request, res: Response) => {
   try {
     const grants = await storage.load<Grant>('grants');
-    let filtered = grants;
-
-    if (req.query.substance) {
-      const substance = (req.query.substance as string).toLowerCase();
-      filtered = filtered.filter(g => g.substances.some(s => s.toLowerCase().includes(substance)));
-    }
-    if (req.query.fiscalYear) {
-      const year = parseInt(req.query.fiscalYear as string);
-      filtered = filtered.filter(g => g.fiscalYear === year);
-    }
-    if (req.query.search) {
-      const search = (req.query.search as string).toLowerCase();
-      filtered = filtered.filter(g =>
-        g.title.toLowerCase().includes(search) ||
-        g.organization?.toLowerCase().includes(search) ||
-        g.piNames.some(name => name.toLowerCase().includes(search))
-      );
-    }
-
-    filtered.sort((a, b) => (b.awardAmount || 0) - (a.awardAmount || 0));
-
-    const page = parseInt(req.query.page as string) || 1;
-    const limit = parseInt(req.query.limit as string) || 50;
-    const start = (page - 1) * limit;
-
-    res.json({
-      data: filtered.slice(start, start + limit),
-      total: filtered.length,
-      page,
-      limit,
-      totalPages: Math.ceil(filtered.length / limit)
-    });
+    res.json(listResponse('grants', grants, req.query as Record<string, unknown>));
   } catch (error) {
     logger.error(`Error fetching grants: ${error}`);
     res.status(500).json({ error: 'Failed to fetch grants' });
+  }
+});
+
+app.get('/api/grants/:id', async (req: Request, res: Response) => {
+  try {
+    const grants = await storage.load<Grant>('grants');
+    const grant = grants.find(g => g.id === req.params.id || g.projectNumber === req.params.id);
+    if (!grant) return res.status(404).json({ error: 'Grant not found' });
+    res.json(grant);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch grant' });
   }
 });
 
@@ -1038,9 +769,9 @@ app.get('/api/changes', async (req: AuthedRequest, res: Response) => {
     const events = await storage.loadChangeEvents({
       entityType: req.query.type as string | undefined,
       since: clampChangesSince(req.user?.plan, req.query.since as string | undefined),
-      limit: parseInt(req.query.limit as string) || 100
+      limit: Math.min(parseInt(req.query.limit as string) || 100, 1000)
     });
-    res.json({ data: events, total: events.length });
+    res.json({ data: events, total: events.length, cursor: events[0]?.detectedAt });
   } catch (error) {
     logger.error(`Error fetching change events: ${error}`);
     res.status(500).json({ error: 'Failed to fetch change events' });
@@ -1055,46 +786,7 @@ app.get('/api/changes', async (req: AuthedRequest, res: Response) => {
 app.get('/api/news', async (req: Request, res: Response) => {
   try {
     const items = await storage.load<NewsItem>('news');
-    let filtered = items;
-
-    if (req.query.category) {
-      const category = (req.query.category as string).toLowerCase();
-      filtered = filtered.filter(n => n.category.toLowerCase() === category);
-    }
-    if (req.query.substance) {
-      const substance = (req.query.substance as string).toLowerCase();
-      filtered = filtered.filter(n => n.substances.some(s => s.toLowerCase() === substance));
-    }
-    if (req.query.company) {
-      const company = (req.query.company as string).toLowerCase();
-      filtered = filtered.filter(n => n.companies.some(c => c.toLowerCase().includes(company)));
-    }
-    if (req.query.search) {
-      const search = (req.query.search as string).toLowerCase();
-      filtered = filtered.filter(n =>
-        n.title.toLowerCase().includes(search) ||
-        n.publisher?.toLowerCase().includes(search) ||
-        n.companies.some(c => c.toLowerCase().includes(search))
-      );
-    }
-    if (req.query.since) {
-      const since = req.query.since as string;
-      filtered = filtered.filter(n => n.publishedAt >= since);
-    }
-
-    filtered.sort((a, b) => b.publishedAt.localeCompare(a.publishedAt));
-
-    const page = parseInt(req.query.page as string) || 1;
-    const limit = Math.min(parseInt(req.query.limit as string) || 50, 500);
-    const start = (page - 1) * limit;
-
-    res.json({
-      data: filtered.slice(start, start + limit),
-      total: filtered.length,
-      page,
-      limit,
-      totalPages: Math.ceil(filtered.length / limit)
-    });
+    res.json(listResponse('news', items, req.query as Record<string, unknown>));
   } catch (error) {
     logger.error(`Error fetching news: ${error}`);
     res.status(500).json({ error: 'Failed to fetch news' });
@@ -1169,7 +861,7 @@ app.get('/api/live', async (_req: Request, res: Response) => {
 // Catch-all: serve index.html for non-API routes (SPA support)
 app.use((req: Request, res: Response, next: NextFunction) => {
   if (req.path.startsWith('/api')) {
-    return res.status(404).json({ error: 'Endpoint not found' });
+    return res.status(404).json({ error: 'Endpoint not found', docs: '/docs' });
   }
   const indexPath = join(projectRoot, 'index.html');
   if (existsSync(indexPath)) {
@@ -1179,7 +871,15 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 });
 
 // Error handler
-app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
+app.use((err: Error & { type?: string }, _req: Request, res: Response, _next: NextFunction) => {
+  if (err.type === 'entity.parse.failed') {
+    res.status(400).json({ error: 'Malformed JSON body' });
+    return;
+  }
+  if (err.type === 'entity.too.large') {
+    res.status(413).json({ error: 'Request body too large' });
+    return;
+  }
   logger.error(`Server error: ${err.message}`);
   res.status(500).json({ error: 'Internal server error' });
 });
@@ -1195,13 +895,14 @@ app.listen(PORT, () => {
   logger.info(`Server running on http://localhost:${PORT}`);
   logger.info('');
   logger.info('Open http://localhost:' + PORT + ' in your browser');
+  logger.info('API docs at http://localhost:' + PORT + '/docs');
   logger.info('');
-  logger.info('API endpoints:');
+  logger.info('API endpoints (also under /api/v1):');
   logger.info('  GET /api/dashboard       - Dashboard summary');
-  logger.info('  GET /api/clinical-trials - Clinical trials');
+  logger.info('  GET /api/clinical-trials - Clinical trials (interventional + observational)');
   logger.info('  GET /api/research        - Research papers');
-  logger.info('  GET /api/companies       - Companies');
-  logger.info('  GET /api/people          - People');
+  logger.info('  GET /api/companies       - Companies (with SEC-sourced leadership)');
+  logger.info('  GET /api/people          - People (?company= for executives)');
   logger.info('  GET /api/jobs            - Job postings');
   logger.info('  GET /api/events          - Events');
   logger.info('  GET /api/search?q=       - Global search');
@@ -1214,7 +915,11 @@ app.listen(PORT, () => {
   logger.info('  GET /api/markets         - Public company stock quotes');
   logger.info('  GET /api/freshness       - Per-dataset crawl freshness');
   logger.info('  GET /api/live            - Live update stream (SSE)');
+  logger.info('  GET /api/bulk/:type      - Bulk table download (Enterprise)');
+  logger.info('  *   /api/datasets        - User datasets');
+  logger.info('  *   /api/admin           - Operator console');
   logger.info(`Storage backend: ${storage.label}`);
+  logger.info(`Accounts: ${appDbAvailable() ? 'enabled' : 'disabled (no DATABASE_URL)'}`);
   logger.info('='.repeat(50));
 });
 

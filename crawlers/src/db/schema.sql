@@ -214,3 +214,101 @@ CREATE INDEX IF NOT EXISTS idx_news_published ON news ((data->>'publishedAt') DE
 CREATE INDEX IF NOT EXISTS idx_change_events_detected ON change_events (detected_at DESC);
 CREATE INDEX IF NOT EXISTS idx_change_events_entity ON change_events (entity_type, entity_id);
 CREATE INDEX IF NOT EXISTS idx_crawl_runs_type ON crawl_runs (data_type, ran_at DESC);
+
+-- ============================================
+-- Launch additions: roles, password resets, user datasets, API metering,
+-- admin-triggered crawls. All idempotent.
+-- ============================================
+
+-- Role-based permissions: 'user' (default) or 'admin' (operator console)
+ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'user';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_subscription_id TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS plan_status TEXT NOT NULL DEFAULT 'active';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS organization TEXT;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'users_role_check') THEN
+    ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('user', 'admin'));
+  END IF;
+END $$;
+
+-- Single-use password reset tokens (hash stored, never the token itself)
+CREATE TABLE IF NOT EXISTS password_reset_tokens (
+  token_hash  TEXT PRIMARY KEY,
+  user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  expires_at  TIMESTAMPTZ NOT NULL,
+  used_at     TIMESTAMPTZ,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_password_resets_user ON password_reset_tokens (user_id);
+
+-- User-built datasets: a named collection of hand-picked entities and/or
+-- saved queries that resolve live against the platform data.
+CREATE TABLE IF NOT EXISTS datasets (
+  id          TEXT PRIMARY KEY,
+  user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name        TEXT NOT NULL,
+  description TEXT,
+  is_public   BOOLEAN NOT NULL DEFAULT false,
+  share_slug  TEXT UNIQUE,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_datasets_user ON datasets (user_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS dataset_items (
+  id           TEXT PRIMARY KEY,
+  dataset_id   TEXT NOT NULL REFERENCES datasets(id) ON DELETE CASCADE,
+  entity_type  TEXT NOT NULL,
+  entity_id    TEXT NOT NULL,
+  entity_title TEXT NOT NULL,
+  note         TEXT,
+  added_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (dataset_id, entity_type, entity_id)
+);
+CREATE INDEX IF NOT EXISTS idx_dataset_items_dataset ON dataset_items (dataset_id, added_at DESC);
+
+-- Saved queries: a dataset row that stays current as crawls land
+CREATE TABLE IF NOT EXISTS dataset_queries (
+  id          TEXT PRIMARY KEY,
+  dataset_id  TEXT NOT NULL REFERENCES datasets(id) ON DELETE CASCADE,
+  entity_type TEXT NOT NULL,
+  params      JSONB NOT NULL DEFAULT '{}'::jsonb,
+  label       TEXT,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_dataset_queries_dataset ON dataset_queries (dataset_id);
+
+-- API usage metering: one row per key per UTC day
+CREATE TABLE IF NOT EXISTS api_usage (
+  api_key_id  TEXT NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
+  day         DATE NOT NULL,
+  requests    INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (api_key_id, day)
+);
+
+ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS scopes TEXT[] NOT NULL DEFAULT ARRAY['read']::text[];
+
+-- Admin-requested crawls: the web process inserts, the scheduler picks up
+CREATE TABLE IF NOT EXISTS crawl_requests (
+  id           BIGSERIAL PRIMARY KEY,
+  crawler      TEXT NOT NULL,
+  requested_by TEXT,
+  requested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  started_at   TIMESTAMPTZ,
+  finished_at  TIMESTAMPTZ,
+  error        TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_crawl_requests_pending ON crawl_requests (requested_at) WHERE started_at IS NULL;
+
+-- Audit trail for sensitive account/admin actions
+CREATE TABLE IF NOT EXISTS audit_log (
+  id         BIGSERIAL PRIMARY KEY,
+  actor_id   TEXT,
+  action     TEXT NOT NULL,
+  target     TEXT,
+  meta       JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_audit_log_created ON audit_log (created_at DESC);

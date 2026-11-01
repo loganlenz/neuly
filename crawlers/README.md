@@ -4,7 +4,7 @@ Data collection system for the Neuly psychedelic medicine research platform. Thi
 
 ## Features
 
-- **ClinicalTrials.gov Crawler** - Trials for every tracked substance, including lead sponsor class and the principal investigators listed on each record
+- **ClinicalTrials.gov Crawler** - Every study for every tracked substance — interventional trials, observational studies and expanded-access programs, in every status (terminated and withdrawn included, with the sponsor's stop reason), with design (allocation, masking, observational model), posted-results flag, lead sponsor class and principal investigators. `crawl:trials` is the full sweep; `crawl:trials:recent` the hourly incremental refresh of recently updated records
 - **PubMed Crawler** - Peer-reviewed papers across ~45 substance/indication queries
 - **Preprint Crawler** - Europe PMC preprint search (bioRxiv, medRxiv, Research Square, SSRN, PsyArXiv, ...): research 6-18 months ahead of the journals
 - **Company Crawler** - Three sources into one dataset: a curated list, every SEC filer whose filings mention a tracked substance (EDGAR full-text search, filtered to pharma/biotech/healthcare SIC codes), and every industry sponsor of a tracked trial. SEC CIKs are resolved from the SEC ticker file, never hard-coded
@@ -13,7 +13,7 @@ Data collection system for the Neuly psychedelic medicine research platform. Thi
 - **Grants Crawler** - NIH RePORTER research grants: the leading indicator of future trials
 - **Job Crawler** - Auto-discovers ATS boards (Greenhouse, Lever, Ashby, Workable) for every company in the database and aggregates their postings
 - **Event Crawler** - Recurring conferences projected to their next edition
-- **People Crawler** - Curated key figures plus people derived from the data: trial principal investigators, NIH grant PIs and authors with 5+ papers in the corpus, each with the evidence for inclusion
+- **People Crawler** - Curated key figures plus people derived from the data: trial principal investigators, NIH grant PIs, authors with 5+ papers in the corpus, and the officers and directors of every tracked company — public companies from SEC Forms 3/4/5 ownership filings (`SecInsidersSource`), private companies from the related persons on their Form D filings — each linked to the company (`companyIds`, `affiliations`) with the evidence for inclusion
 - **Care Crawler** - Care directory: state-licensed psilocybin service centers (Oregon Psilocybin Services, best-effort) plus a curated list of established clinics, telehealth platforms and research centers, flagged `verified` only when a regulator record backs them
 - **OpenAlex Enrichment** - Refreshes citation counts and open-access flags on stored papers
 - **Readout Calendar** - `/api/readouts` derives expected trial results windows from completion dates — the sector's earnings calendar
@@ -23,13 +23,16 @@ Data collection system for the Neuly psychedelic medicine research platform. Thi
 
 ## Product surface
 
-- **Accounts & plans** - signup/login with session cookies (`/api/auth/*`); free / pro / enterprise plans
+- **Accounts & plans** - signup/login with session cookies (`/api/auth/*`); free / pro / enterprise plans; roles `user` / `admin` (bootstrapped from `ADMIN_EMAILS`); forgot/reset password by email, profile, change password, delete account; brute-force rate limits and an audit log
+- **Datasets** - user-built collections (`/api/datasets`): hand-picked records plus live saved queries (same filters as the list endpoints), resolved on every read, exported as CSV/JSON (Pro) and shared publicly by slug (Pro)
+- **Public API** - `/api/v1/*` alias of every endpoint, API keys for Pro/Enterprise with daily quotas and per-minute bursts metered in `api_usage`, `X-RateLimit-*` headers, `/api/openapi.json`, `/docs`, and `/api/v1/bulk/:table` NDJSON/JSON/CSV downloads for Enterprise. One filter implementation (`src/web/dataQuery.ts`) backs the UI, the API and saved queries
+- **Admin console** - `/api/admin/*` (and `/admin` in the app): users, plan/role overrides, business overview, run-any-crawler-now via the `crawl_requests` table the scheduler polls, audit log
 - **Saved items** - per-user save/follow of any entity (`/api/saves`), shown on the dashboard and the saved/following tabs
-- **Plan gating** - free sees 7 days of change history and a 90-day readout horizon; Pro+ gets full history, full horizon, and CSV export (`/api/export/:type`); Enterprise gets API keys (`/api/keys`, `Authorization: Bearer nk_...`)
+- **Plan gating** - one catalog in `src/web/plans.ts`: free sees 7 days of change history, a 90-day readout horizon, 1 dataset and 1 alert; Pro adds full history, unlimited datasets/alerts, exports, share links and API keys (2,000 requests/day); Enterprise adds 100,000 requests/day and bulk downloads
 - **Alerts** - saved subscriptions (`/api/alerts`, entity type + keyword) matched daily against the change log and emailed
 - **Newsletter** - auto-generated weekly digest (changes by section + upcoming readouts), archived in `newsletter_issues` and sent to opted-in users
 - **Email delivery** - Resend when `RESEND_API_KEY` is set; otherwise messages land in `data/outbox/` (dev-friendly)
-- **Billing** - Stripe Checkout + signature-verified webhook + customer portal, enabled by the `STRIPE_*` env vars
+- **Billing** - `/api/billing/plans`, Stripe Checkout (reusing the customer), signature-verified webhook keeping `users.plan` / `plan_status` in sync with subscription and invoice events, customer portal — enabled by the `STRIPE_*` env vars
 - **Programmatic SEO pages** - server-rendered, crawlable pages generated from the database: `/substances/:slug`, `/trials/:nctId`, `/company-profiles/:slug`, `/policy/:jurisdiction`, `/readouts-calendar`, plus `robots.txt` and `sitemap.xml`
 
 ## Installation
@@ -58,7 +61,11 @@ cp .env.example .env
 | `OREGON_PSILOCYBIN_API` | Override for the Oregon Psilocybin Services licensee directory endpoint used by the care crawler | No |
 | `LOG_LEVEL` | Logging level: debug, info, warn, error | No |
 | `RUN_ON_START` | Scheduler: run all crawlers immediately on startup | No |
-| `SCHEDULE_<CRAWLER>` | Scheduler: cron override per crawler, e.g. `SCHEDULE_JOBS="30 7 * * *"` | No |
+| `SCHEDULE_<CRAWLER>` | Scheduler: cron override per crawler, e.g. `SCHEDULE_JOBS="30 7 * * *"` (`SCHEDULE_TRIALS_RECENT` for the incremental trials crawl) | No |
+| `ADMIN_EMAILS` | Operator emails promoted to the admin role | No |
+| `CORS_ORIGINS` | Allowed browser origins for cookie-authenticated calls (unset = any) | No |
+| `API_QUOTA_PRO` / `API_QUOTA_ENTERPRISE` | API requests per day per plan | No |
+| `PLAN_PRICE_PRO` / `PLAN_PRICE_ENTERPRISE` | Display prices on the pricing page | No |
 
 ### Postgres
 

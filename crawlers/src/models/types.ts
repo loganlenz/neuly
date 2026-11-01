@@ -78,7 +78,22 @@ export const ClinicalTrialSchema = z.object({
   officialTitle: z.string().optional(),
   status: z.enum(STUDY_STATUSES),
   phase: z.enum(CLINICAL_PHASES).optional(),
+  /** INTERVENTIONAL, OBSERVATIONAL or EXPANDED_ACCESS */
   studyType: z.string().optional(),
+  /** Observational studies: COHORT, CASE_CONTROL, CASE_ONLY, ... */
+  observationalModel: z.string().optional(),
+  /** Observational studies: PROSPECTIVE, RETROSPECTIVE, CROSS_SECTIONAL */
+  timePerspective: z.string().optional(),
+  /** Interventional design: RANDOMIZED, NON_RANDOMIZED, NA */
+  allocation: z.string().optional(),
+  /** TREATMENT, PREVENTION, BASIC_SCIENCE, ... */
+  primaryPurpose: z.string().optional(),
+  masking: z.string().optional(),
+  /** Results posted on ClinicalTrials.gov */
+  hasResults: z.boolean().optional(),
+  resultsFirstPostDate: z.string().optional(),
+  /** Sponsor's explanation when a study is suspended, terminated or withdrawn */
+  whyStopped: z.string().optional(),
   conditions: z.array(z.string()),
   interventions: z.array(z.object({
     type: z.string(),
@@ -249,8 +264,15 @@ export const PersonSchema = z.object({
   affiliations: z.array(z.object({
     organization: z.string(),
     role: z.string().optional(),
-    current: z.boolean().optional()
+    current: z.boolean().optional(),
+    /** Neuly company id when the affiliation is a tracked company */
+    companyId: z.string().optional(),
+    /** Where the affiliation was observed: 'SEC Form 4', 'SEC Form D', 'Curated', ... */
+    source: z.string().optional(),
+    asOf: z.string().optional()
   })).optional(),
+  /** Tracked companies this person works at or sits on the board of */
+  companyIds: z.array(z.string()).optional(),
   website: z.string().url().optional(),
   email: z.string().email().optional(),
   linkedIn: z.string().url().optional(),

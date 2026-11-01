@@ -11,6 +11,7 @@
     "server": "tsx src/server.ts",
     "server:dev": "tsx watch src/server.ts",
     "crawl:trials": "tsx src/index.ts --crawler=clinicaltrials",
+    "crawl:trials:recent": "tsx src/index.ts --crawler=trials-recent",
     "crawl:pubmed": "tsx src/index.ts --crawler=pubmed",
     "crawl:companies": "tsx src/index.ts --crawler=companies",
     "crawl:jobs": "tsx src/index.ts --crawler=jobs",
@@ -33,7 +34,8 @@
     "deploy:start": "tsx src/db/migrate.ts --if-configured && npm run db:cleanup-legacy && npm run seed:if-empty && npm run server",
     "setup": "npm run seed && npm run server",
     "lint": "eslint src/",
-    "test": "vitest run"
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
   },
   "keywords": [
     "crawler",

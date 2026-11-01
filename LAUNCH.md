@@ -21,7 +21,23 @@ Browser ◀── /api/live (Server-Sent Events) ── web server polls the cha
 
 Cadences live in `crawlers/src/schedule.ts` (override any with
 `SCHEDULE_<CRAWLER>`); `/api/freshness` and the **Industry Live → Data
-Status** tab show the last successful crawl per dataset.
+Status** tab show the last successful crawl per dataset. ClinicalTrials.gov
+is pulled two ways: an hourly incremental crawl of every study whose record
+changed in the last 3 days (`trials-recent`) and a full sweep every 6 hours
+(`clinicaltrials`) — all statuses, interventional and observational studies,
+expanded-access programs, posted results and stop reasons included. Admins
+can also trigger any crawler on demand from `/admin`.
+
+```
+Users ── /api/auth (signup, login, reset, profile) ── roles: user | admin
+      ── /api/datasets  user-built datasets (picked items + live saved queries,
+                        export, public share links)
+      ── /api/keys      API keys (Pro / Enterprise) + usage metering
+      ── /api/v1/*      public REST API (same handlers, versioned prefix),
+                        /api/openapi.json, /docs, /api/v1/bulk/:table (Enterprise)
+      ── /api/billing   Stripe plans / checkout / portal / webhook
+      ── /api/admin     operator console: users, plan overrides, crawler control, audit
+```
 
 ## Option A — Render (fastest, recommended)
 
@@ -39,7 +55,10 @@ Status** tab show the last successful crawl per dataset.
    → people → ...) — fills every dataset from ClinicalTrials.gov, PubMed,
    Europe PMC, SEC EDGAR, Federal Register, NIH RePORTER and the ATS boards.
 4. Custom domain: neuly-web → Settings → Custom Domains → add your domain,
-   then set the `SITE_URL` env var to it (drives sitemap/canonical/Stripe URLs).
+   then set the `SITE_URL` env var to it (drives sitemap/canonical/Stripe URLs
+   and password-reset links).
+5. Set `ADMIN_EMAILS` to your email on neuly-web, sign up through the site,
+   and open `/admin` — you can comp plans, add admins and trigger crawls there.
 
 ## Option B — Anywhere with Docker
 
@@ -62,6 +81,12 @@ docker run -e DATABASE_URL=postgres://... -e RUN_ON_START=true neuly npm run sch
 | `NCBI_API_KEY` | scheduler | PubMed rate limit 3/s → 10/s |
 | `OPENALEX_MAILTO` | scheduler | OpenAlex polite pool |
 | `RUN_ON_START=true` | scheduler | crawl everything immediately on boot |
+| `ADMIN_EMAILS` | web | comma-separated operator emails promoted to the admin role |
+| `CORS_ORIGINS` | web | allowed browser origins when the frontend is hosted elsewhere (unset = any) |
+| `PLAN_PRICE_PRO`, `PLAN_PRICE_ENTERPRISE` | web | display prices on `/pricing` (defaults 79 / 499) |
+| `API_QUOTA_PRO`, `API_QUOTA_ENTERPRISE` | web | API requests per day per plan (defaults 2,000 / 100,000) |
+| `ANON_RATE_LIMIT_PER_MINUTE`, `SESSION_RATE_LIMIT_PER_MINUTE` | web | web traffic limits (defaults 120 / 600) |
+| `CT_RECENT_DAYS` | scheduler | window for the hourly incremental ClinicalTrials.gov crawl (default 3) |
 | `OREGON_PSILOCYBIN_API` | scheduler | override for the Oregon licensee directory endpoint (care crawler) |
 
 ## Launch-day checklist
@@ -80,6 +105,11 @@ docker run -e DATABASE_URL=postgres://... -e RUN_ON_START=true neuly npm run sch
 - [ ] Sign up through the site UI (Join Free), save a company, sign out and
       log back in — confirms accounts, sessions, and `/api/saves` end-to-end
 - [ ] Sign up, save an alert, upgrade to Pro end-to-end once in production
+- [ ] `ADMIN_EMAILS` set; `/admin` loads for your account and a "Run a crawler now" request finishes
+- [ ] Stripe webhook events enabled: `checkout.session.completed`, `customer.subscription.created/updated/deleted`, `invoice.paid`, `invoice.payment_failed`
+- [ ] Create an API key on a Pro account, call `https://<domain>/api/v1/clinical-trials?limit=1` with it, and see `X-RateLimit-*` headers
+- [ ] `/docs` and `/api/openapi.json` render; share one dataset publicly and open its link signed out
+- [ ] Forgot-password email arrives (Resend) and the link on `/reset-password` works
 
 ## What shipped in the launch-readiness pass
 
@@ -115,6 +145,53 @@ docker run -e DATABASE_URL=postgres://... -e RUN_ON_START=true neuly npm run sch
   Nuveen ETF) and stale listings are dropped. Big moves (±5/10/20%) land in
   the change log and alerts.
 - **Alerts** now dispatch hourly instead of daily.
+
+## What shipped in the launch-completion pass
+
+- **ClinicalTrials.gov, completely** — every status (terminated/withdrawn/
+  suspended trials are now tracked, with the sponsor's stop reason), study
+  type (interventional, observational, expanded access) with observational
+  model and time perspective, allocation/masking/purpose, results-posted flag
+  and date. Hourly incremental refresh + 6-hourly full sweep; 13 new queries
+  target observational studies, registries and real-world evidence.
+- **People at companies, from the SEC** — officers and directors of every
+  tracked public company are pulled from Forms 3/4/5 (structured ownership
+  XML: name, officer title, director flag, as-of date) and the related persons
+  on private companies' Form D filings. People carry `companyIds` and
+  `affiliations` with provenance; company profiles show the leadership team
+  (`/api/companies/:id` returns `leadership`, `people`, `trials`, `jobs`,
+  `fundingEvents`); `/api/people?company=` filters by company.
+- **Accounts & permissions** — roles (`user` / `admin`, bootstrapped from
+  `ADMIN_EMAILS`), forgot/reset password by email (single-use, 1h tokens),
+  profile + newsletter preference, change password, delete account, audit
+  log, brute-force rate limits on credential endpoints, CORS allowlist,
+  security headers, trust-proxy, JSON body limits.
+- **User datasets** — `/datasets`: named collections of hand-picked records
+  (the "+ Dataset" button on every company/person/study card) and live saved
+  queries that resolve against the latest crawl; CSV/JSON export (Pro),
+  public share links (Pro) at `/datasets/shared/:slug`, plan limits (Free:
+  1 dataset / 50 items / 2 queries).
+- **The API product** — `/api/v1/*` versioned alias of every endpoint,
+  API keys for Pro (2,000/day, 120/min) and Enterprise (100,000/day,
+  600/min) with per-day metering, `X-RateLimit-*` headers, anonymous per-IP
+  limits, `/api/keys/usage`, `/api/openapi.json`, a server-rendered `/docs`
+  page, and `/api/v1/bulk/:table` NDJSON/JSON/CSV downloads (Enterprise).
+  Every list endpoint shares one filter implementation
+  (`src/web/dataQuery.ts`) with the UI and saved queries.
+- **Billing** — `/api/billing/plans` (plan catalog from `src/web/plans.ts`),
+  checkout reuses the Stripe customer, webhook handles subscription
+  created/updated/deleted, invoice paid/failed (`plan_status` = past_due),
+  `/pricing` page, Account → Plan & Billing with portal access.
+- **Operator console** — `/admin`: users with plan/role overrides, business
+  overview (signups, plans, estimated MRR, API traffic), run-any-crawler-now
+  (queued in `crawl_requests`, picked up by the scheduler within 30s), data
+  freshness, audit log.
+- **Frontend** — real URLs for every app page (`/pricing`, `/account`,
+  `/datasets`, `/admin`, `/reset-password`, `/datasets/shared/:slug`),
+  Account page (profile, billing, API keys + usage, alerts, security),
+  Datasets pages, pricing page, forgot-password flow, study-type filter and
+  results/observational chips on Studies, SEC-sourced leadership on company
+  profiles, toasts.
 
 ## Known post-launch work (in priority order)
 
