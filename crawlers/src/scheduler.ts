@@ -127,7 +127,7 @@ async function main(): Promise<void> {
     // and jobs derive from companies, people derive from trials/grants/papers.
     const bootOrder: Array<Exclude<CrawlerName, 'all'>> = [
       'clinicaltrials', 'pubmed', 'preprints', 'grants', 'companies', 'funding', 'jobs', 'people',
-      'events', 'legislation', 'care', 'news', 'markets', 'openalex'
+      'events', 'legislation', 'care', 'news', 'markets', 'openalex', 'headshots'
     ];
     logger.info('[Scheduler] RUN_ON_START=true — running all crawlers now');
     for (const crawler of bootOrder) {

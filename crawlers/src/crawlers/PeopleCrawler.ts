@@ -13,6 +13,7 @@ import {
 } from '../models/types.js';
 import { logger } from '../utils/logger.js';
 import { SecInsidersSource, insiderTitle } from './SecInsidersSource.js';
+import { TeamPageSource } from './TeamPageSource.js';
 import { normalizeCompanyName } from './CompanyCrawler.js';
 
 export interface PeopleCrawlerOptions {
@@ -34,6 +35,12 @@ export interface PeopleCrawlerOptions {
   skipSec?: boolean;
   /** Injected for tests */
   insidersSource?: SecInsidersSource;
+  /** Skip company website team pages (tests / offline) */
+  skipTeamPages?: boolean;
+  /** Injected for tests */
+  teamPageSource?: TeamPageSource;
+  /** Company websites visited per run (default 120) */
+  maxTeamPages?: number;
 }
 
 /** Degrees and honorifics trailing a name on ClinicalTrials.gov ("Jane Doe, MD, PhD") */
@@ -655,6 +662,9 @@ export class PeopleCrawler extends BaseCrawler<Person> {
             ...existing,
             title: existing.title || exec.title,
             organization: existing.organization || exec.organization,
+            imageUrl: existing.imageUrl || exec.imageUrl,
+            imageSource: existing.imageUrl ? existing.imageSource : exec.imageSource,
+            imageAttribution: existing.imageUrl ? existing.imageAttribution : exec.imageAttribution,
             companyIds: Array.from(new Set([...(existing.companyIds ?? []), ...(exec.companyIds ?? [])])),
             affiliations: mergeAffiliations(existing.affiliations, exec.affiliations),
             evidence: Array.from(new Set([...(existing.evidence ?? []), ...(exec.evidence ?? [])])).slice(0, 30),
@@ -752,7 +762,7 @@ export class PeopleCrawler extends BaseCrawler<Person> {
 
     // Public companies: ownership filings
     if (!this.options.skipSec) {
-      const source = this.options.insidersSource ?? new SecInsidersSource();
+      const source = this.options.insidersSource ?? new SecInsidersSource({ maxFilingsPerCompany: Number(process.env.SEC_INSIDER_FILINGS_PER_COMPANY ?? 40), maxAgeDays: 1095 });
       const withCik = companies.filter(c => c.cik);
       for (const company of withCik) {
         try {
@@ -767,6 +777,36 @@ export class PeopleCrawler extends BaseCrawler<Person> {
           errors.push(`SEC insiders for ${company.name}: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
       }
+    }
+
+    // Company websites: the leadership page every company publishes itself.
+    // Covers private companies with no filings and the management team
+    // beyond Section 16 officers. Names already seen keep their SEC title.
+    if (!this.options.skipTeamPages) {
+      const source = this.options.teamPageSource ?? new TeamPageSource();
+      const withSite = companies.filter(c => c.website).slice(0, this.options.maxTeamPages ?? Number(process.env.TEAM_PAGES_PER_RUN ?? 120));
+      let pagesWithTeams = 0;
+      for (const company of withSite) {
+        try {
+          const team = await source.fetchTeam(company);
+          if (team.length > 0) pagesWithTeams++;
+          for (const member of team) {
+            const existingKey = normalizePersonName(member.name).toLowerCase();
+            const prior = byPerson.get(existingKey);
+            upsert(member.name, company, prior ? (prior.affiliations.find(a => a.companyId === company.id)?.role ?? member.title) : member.title, 'Executive',
+              `Listed as ${member.title} on ${member.pageUrl}`, 'Company website');
+            const current = byPerson.get(existingKey);
+            if (current && member.imageUrl && !current.imageUrl) {
+              current.imageUrl = member.imageUrl;
+              current.imageSource = 'Company website';
+              current.imageAttribution = member.pageUrl;
+            }
+          }
+        } catch (error) {
+          errors.push(`Team page for ${company.name}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+      }
+      logger.info(`[PeopleCrawler] Team pages: ${pagesWithTeams}/${withSite.length} company sites listed a team`);
     }
 
     // Private companies: Form D related persons
@@ -785,7 +825,11 @@ export class PeopleCrawler extends BaseCrawler<Person> {
       }
     }
 
-    return Array.from(byPerson.values()).map(p => ({ ...p, source: p.affiliations.some(a => a.source === 'SEC Form 4') ? 'SEC Form 4' : 'SEC Form D' }));
+    return Array.from(byPerson.values()).map(p => ({
+      ...p,
+      source: p.affiliations.some(a => a.source === 'SEC Form 4') ? 'SEC Form 4'
+        : p.affiliations.some(a => a.source === 'SEC Form D') ? 'SEC Form D' : 'Company website'
+    }));
   }
 
   /**

@@ -28,6 +28,7 @@ import {
   CareProvider,
   NewsItem,
   MarketQuote,
+  CrawledData,
   SUBSTANCES
 } from './models/types.js';
 import { deriveReadoutCalendar } from './core/readouts.js';
@@ -36,6 +37,7 @@ import { adminRouter } from './admin/admin.js';
 import { datasetsRouter } from './datasets/datasets.js';
 import { versionAlias, apiTrafficPolicy, publicApiRouter, listResponse, API_VERSION } from './web/publicApi.js';
 import { appDbAvailable, getAppDb } from './db/appDb.js';
+import { trackingRouter, leadsRouter, partnersRouter, marketplaceAdminRouter } from './marketplace/marketplace.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -150,6 +152,32 @@ function leadershipFor(company: Company, people: Person[]): Company['leadership'
 }
 
 /**
+ * Everything beyond the front page needs an account. Anonymous callers get
+ * a short preview of each list (enough for the marketing pages to render
+ * real data) and no single records. API keys and sessions see everything.
+ */
+const ANON_PREVIEW_ROWS = Number(process.env.ANON_PREVIEW_ROWS ?? 6);
+function listFor(req: AuthedRequest, type: DataType, rows: CrawledData[], options: Parameters<typeof listResponse>[3] = {}) {
+  const query = { ...(req.query as Record<string, unknown>) };
+  if (!req.user) {
+    const requested = parseInt(String(query.limit ?? '')) || ANON_PREVIEW_ROWS;
+    query.limit = String(Math.min(requested, ANON_PREVIEW_ROWS));
+    query.page = '1';
+    const result = listResponse(type, rows, query, options);
+    return { ...result, preview: true, message: 'Sign in to see every record' };
+  }
+  return listResponse(type, rows, query, options);
+}
+
+function requireAccount(req: AuthedRequest, res: Response, next: NextFunction): void {
+  if (!req.user) {
+    res.status(401).json({ error: 'Sign in to view this record', signin: true });
+    return;
+  }
+  next();
+}
+
+/**
  * Health check endpoint (includes the database when configured)
  */
 app.get('/api/health', async (_req: Request, res: Response) => {
@@ -193,17 +221,17 @@ app.get('/api/stats', async (_req: Request, res: Response) => {
 // CLINICAL TRIALS
 // ============================================
 
-app.get('/api/clinical-trials', async (req: Request, res: Response) => {
+app.get('/api/clinical-trials', async (req: AuthedRequest, res: Response) => {
   try {
     const trials = await storage.load<ClinicalTrial>('clinical_trials');
-    res.json(listResponse('clinical_trials', trials, req.query as Record<string, unknown>));
+    res.json(listFor(req, 'clinical_trials', trials));
   } catch (error) {
     logger.error(`Error fetching clinical trials: ${error}`);
     res.status(500).json({ error: 'Failed to fetch clinical trials' });
   }
 });
 
-app.get('/api/clinical-trials/:id', async (req: Request, res: Response) => {
+app.get('/api/clinical-trials/:id', requireAccount, async (req: AuthedRequest, res: Response) => {
   try {
     const trials = await storage.load<ClinicalTrial>('clinical_trials');
     const wanted = req.params.id.toLowerCase();
@@ -223,22 +251,22 @@ app.get('/api/clinical-trials/:id', async (req: Request, res: Response) => {
 // RESEARCH PAPERS
 // ============================================
 
-app.get('/api/research', async (req: Request, res: Response) => {
+app.get('/api/research', async (req: AuthedRequest, res: Response) => {
   try {
     const papers = await storage.load<ResearchPaper>('research_papers');
-    const query = { ...(req.query as Record<string, unknown>) };
+    const query = req.query as Record<string, unknown>;
 
     // author=Robin Carhart-Harris — matches "Carhart-Harris R", "Robin Carhart-Harris", etc.
     let rows: ResearchPaper[] = papers;
     if (typeof query.author === 'string') {
       const wanted = normalizeAuthor(query.author);
       if (wanted.last) rows = rows.filter(p => p.authors.some(a => authorMatches(a.name, wanted)));
-      delete query.author;
+      delete (req.query as Record<string, unknown>).author;
     }
 
     // Abstracts dominate payload size; list responses carry a preview unless full=1
     const full = query.full === '1' || query.full === 'true';
-    res.json(listResponse('research_papers', rows, query, {
+    res.json(listFor(req, 'research_papers', rows, {
       map: row => {
         const p = row as ResearchPaper;
         return full || !p.abstract || p.abstract.length <= 400
@@ -252,7 +280,7 @@ app.get('/api/research', async (req: Request, res: Response) => {
   }
 });
 
-app.get('/api/research/:id', async (req: Request, res: Response) => {
+app.get('/api/research/:id', requireAccount, async (req: AuthedRequest, res: Response) => {
   try {
     const papers = await storage.load<ResearchPaper>('research_papers');
     const paper = papers.find(p => p.id === req.params.id || p.pmid === req.params.id || p.doi === req.params.id);
@@ -271,13 +299,13 @@ app.get('/api/research/:id', async (req: Request, res: Response) => {
 // COMPANIES
 // ============================================
 
-app.get('/api/companies', async (req: Request, res: Response) => {
+app.get('/api/companies', async (req: AuthedRequest, res: Response) => {
   try {
     const [companies, people] = await Promise.all([
       storage.load<Company>('companies'),
       storage.load<Person>('people')
     ]);
-    res.json(listResponse('companies', companies, req.query as Record<string, unknown>, {
+    res.json(listFor(req, 'companies', companies, {
       map: row => {
         const c = row as Company;
         return { ...c, leadership: leadershipFor(c, people) };
@@ -289,7 +317,7 @@ app.get('/api/companies', async (req: Request, res: Response) => {
   }
 });
 
-app.get('/api/companies/:id', async (req: Request, res: Response) => {
+app.get('/api/companies/:id', requireAccount, async (req: AuthedRequest, res: Response) => {
   try {
     const [companies, people, trials, jobs, funding] = await Promise.all([
       storage.load<Company>('companies'),
@@ -323,17 +351,17 @@ app.get('/api/companies/:id', async (req: Request, res: Response) => {
 // PEOPLE
 // ============================================
 
-app.get('/api/people', async (req: Request, res: Response) => {
+app.get('/api/people', async (req: AuthedRequest, res: Response) => {
   try {
     const people = await storage.load<Person>('people');
-    res.json(listResponse('people', people, req.query as Record<string, unknown>));
+    res.json(listFor(req, 'people', people));
   } catch (error) {
     logger.error(`Error fetching people: ${error}`);
     res.status(500).json({ error: 'Failed to fetch people' });
   }
 });
 
-app.get('/api/people/:id', async (req: Request, res: Response) => {
+app.get('/api/people/:id', requireAccount, async (req: AuthedRequest, res: Response) => {
   try {
     const [people, companies] = await Promise.all([
       storage.load<Person>('people'),
@@ -358,17 +386,17 @@ app.get('/api/people/:id', async (req: Request, res: Response) => {
 // JOBS
 // ============================================
 
-app.get('/api/jobs', async (req: Request, res: Response) => {
+app.get('/api/jobs', async (req: AuthedRequest, res: Response) => {
   try {
     const jobs = await storage.load<JobPosting>('jobs');
-    res.json(listResponse('jobs', jobs, req.query as Record<string, unknown>));
+    res.json(listFor(req, 'jobs', jobs));
   } catch (error) {
     logger.error(`Error fetching jobs: ${error}`);
     res.status(500).json({ error: 'Failed to fetch jobs' });
   }
 });
 
-app.get('/api/jobs/:id', async (req: Request, res: Response) => {
+app.get('/api/jobs/:id', requireAccount, async (req: AuthedRequest, res: Response) => {
   try {
     const jobs = await storage.load<JobPosting>('jobs');
     const job = jobs.find(j => j.id === req.params.id);
@@ -387,17 +415,17 @@ app.get('/api/jobs/:id', async (req: Request, res: Response) => {
 // EVENTS
 // ============================================
 
-app.get('/api/events', async (req: Request, res: Response) => {
+app.get('/api/events', async (req: AuthedRequest, res: Response) => {
   try {
     const events = await storage.load<Event>('events');
-    res.json(listResponse('events', events, req.query as Record<string, unknown>));
+    res.json(listFor(req, 'events', events));
   } catch (error) {
     logger.error(`Error fetching events: ${error}`);
     res.status(500).json({ error: 'Failed to fetch events' });
   }
 });
 
-app.get('/api/events/:id', async (req: Request, res: Response) => {
+app.get('/api/events/:id', requireAccount, async (req: AuthedRequest, res: Response) => {
   try {
     const events = await storage.load<Event>('events');
     const event = events.find(e => e.id === req.params.id);
@@ -416,10 +444,10 @@ app.get('/api/events/:id', async (req: Request, res: Response) => {
 // EDUCATION
 // ============================================
 
-app.get('/api/education', async (req: Request, res: Response) => {
+app.get('/api/education', async (req: AuthedRequest, res: Response) => {
   try {
     const courses = await storage.load('educational_resources');
-    res.json(listResponse('educational_resources', courses, req.query as Record<string, unknown>));
+    res.json(listFor(req, 'educational_resources', courses));
   } catch (error) {
     logger.error(`Error fetching educational resources: ${error}`);
     res.status(500).json({ error: 'Failed to fetch educational resources' });
@@ -434,17 +462,17 @@ app.get('/api/education', async (req: Request, res: Response) => {
  * Care directory: state-licensed service centers + curated clinics.
  * Query params: type, state, country, substance, search, verified, page, limit
  */
-app.get('/api/care', async (req: Request, res: Response) => {
+app.get('/api/care', async (req: AuthedRequest, res: Response) => {
   try {
     const providers = await storage.load<CareProvider>('care_providers');
-    res.json(listResponse('care_providers', providers, req.query as Record<string, unknown>));
+    res.json(listFor(req, 'care_providers', providers));
   } catch (error) {
     logger.error(`Error fetching care providers: ${error}`);
     res.status(500).json({ error: 'Failed to fetch care providers' });
   }
 });
 
-app.get('/api/care/:id', async (req: Request, res: Response) => {
+app.get('/api/care/:id', requireAccount, async (req: AuthedRequest, res: Response) => {
   try {
     const providers = await storage.load<CareProvider>('care_providers');
     const provider = providers.find(p => p.id === req.params.id);
@@ -543,7 +571,7 @@ app.get('/api/dashboard', async (_req: Request, res: Response) => {
 /**
  * Search across all data types
  */
-app.get('/api/search', async (req: Request, res: Response) => {
+app.get('/api/search', requireAccount, async (req: AuthedRequest, res: Response) => {
   try {
     const query = (req.query.q as string || '').toLowerCase();
 
@@ -627,7 +655,11 @@ app.use('/api/saves', savesRouter());
 app.use('/api/alerts', alertsRouter());
 app.use('/api/billing', billingRouter());
 app.use('/api/datasets', datasetsRouter(storage));
+app.use('/api/admin/marketplace', marketplaceAdminRouter());
 app.use('/api/admin', adminRouter(storage));
+app.use('/api/track', trackingRouter());
+app.use('/api/leads', leadsRouter(storage));
+app.use('/api/partners', partnersRouter(storage));
 app.use(publicApiRouter(storage));
 app.use(seoRouter(storage));
 
@@ -658,17 +690,17 @@ app.get('/api/export/:type', requirePlan('pro', 'enterprise'), async (req: Authe
  * Legislation & regulatory tracker: state bills + federal register documents.
  * Query params: jurisdiction (state code or US-Federal), substance, search, page, limit
  */
-app.get('/api/legislation', async (req: Request, res: Response) => {
+app.get('/api/legislation', async (req: AuthedRequest, res: Response) => {
   try {
     const bills = await storage.load<LegislationBill>('legislation');
-    res.json(listResponse('legislation', bills, req.query as Record<string, unknown>));
+    res.json(listFor(req, 'legislation', bills));
   } catch (error) {
     logger.error(`Error fetching legislation: ${error}`);
     res.status(500).json({ error: 'Failed to fetch legislation' });
   }
 });
 
-app.get('/api/legislation/:id', async (req: Request, res: Response) => {
+app.get('/api/legislation/:id', requireAccount, async (req: AuthedRequest, res: Response) => {
   try {
     const bills = await storage.load<LegislationBill>('legislation');
     const bill = bills.find(b => b.id === req.params.id);
@@ -683,17 +715,17 @@ app.get('/api/legislation/:id', async (req: Request, res: Response) => {
  * Funding events: SEC Form D filings by companies in the space.
  * Query params: search, since (YYYY-MM-DD), page, limit
  */
-app.get('/api/funding', async (req: Request, res: Response) => {
+app.get('/api/funding', async (req: AuthedRequest, res: Response) => {
   try {
     const events = await storage.load<FundingEvent>('funding_events');
-    res.json(listResponse('funding_events', events, req.query as Record<string, unknown>));
+    res.json(listFor(req, 'funding_events', events));
   } catch (error) {
     logger.error(`Error fetching funding events: ${error}`);
     res.status(500).json({ error: 'Failed to fetch funding events' });
   }
 });
 
-app.get('/api/funding/:id', async (req: Request, res: Response) => {
+app.get('/api/funding/:id', requireAccount, async (req: AuthedRequest, res: Response) => {
   try {
     const events = await storage.load<FundingEvent>('funding_events');
     const event = events.find(f => f.id === req.params.id || f.accessionNumber === req.params.id);
@@ -708,17 +740,17 @@ app.get('/api/funding/:id', async (req: Request, res: Response) => {
  * Research grants (NIH RePORTER).
  * Query params: substance, search, fiscalYear, page, limit
  */
-app.get('/api/grants', async (req: Request, res: Response) => {
+app.get('/api/grants', async (req: AuthedRequest, res: Response) => {
   try {
     const grants = await storage.load<Grant>('grants');
-    res.json(listResponse('grants', grants, req.query as Record<string, unknown>));
+    res.json(listFor(req, 'grants', grants));
   } catch (error) {
     logger.error(`Error fetching grants: ${error}`);
     res.status(500).json({ error: 'Failed to fetch grants' });
   }
 });
 
-app.get('/api/grants/:id', async (req: Request, res: Response) => {
+app.get('/api/grants/:id', requireAccount, async (req: AuthedRequest, res: Response) => {
   try {
     const grants = await storage.load<Grant>('grants');
     const grant = grants.find(g => g.id === req.params.id || g.projectNumber === req.params.id);
@@ -751,8 +783,8 @@ app.get('/api/readouts', async (req: AuthedRequest, res: Response) => {
       readouts = readouts.filter(r => r.substances.some(s => s.toLowerCase().includes(substance)));
     }
 
-    const limit = parseInt(req.query.limit as string) || 100;
-    res.json({ data: readouts.slice(0, limit), total: readouts.length });
+    const limit = Math.min(parseInt(req.query.limit as string) || 100, req.user ? 1000 : ANON_PREVIEW_ROWS);
+    res.json({ data: readouts.slice(0, limit), total: readouts.length, ...(req.user ? {} : { preview: true }) });
   } catch (error) {
     logger.error(`Error deriving readout calendar: ${error}`);
     res.status(500).json({ error: 'Failed to derive readout calendar' });
@@ -769,7 +801,7 @@ app.get('/api/changes', async (req: AuthedRequest, res: Response) => {
     const events = await storage.loadChangeEvents({
       entityType: req.query.type as string | undefined,
       since: clampChangesSince(req.user?.plan, req.query.since as string | undefined),
-      limit: Math.min(parseInt(req.query.limit as string) || 100, 1000)
+      limit: Math.min(parseInt(req.query.limit as string) || 100, req.user ? 1000 : ANON_PREVIEW_ROWS)
     });
     res.json({ data: events, total: events.length, cursor: events[0]?.detectedAt });
   } catch (error) {
@@ -783,10 +815,10 @@ app.get('/api/changes', async (req: AuthedRequest, res: Response) => {
  * Query params: category ('News' | 'SEC Filing'), substance, company, search,
  * since (ISO date), page, limit
  */
-app.get('/api/news', async (req: Request, res: Response) => {
+app.get('/api/news', async (req: AuthedRequest, res: Response) => {
   try {
     const items = await storage.load<NewsItem>('news');
-    res.json(listResponse('news', items, req.query as Record<string, unknown>));
+    res.json(listFor(req, 'news', items));
   } catch (error) {
     logger.error(`Error fetching news: ${error}`);
     res.status(500).json({ error: 'Failed to fetch news' });
@@ -918,6 +950,7 @@ app.listen(PORT, () => {
   logger.info('  GET /api/bulk/:type      - Bulk table download (Enterprise)');
   logger.info('  *   /api/datasets        - User datasets');
   logger.info('  *   /api/admin           - Operator console');
+  logger.info('  *   /api/leads, /api/partners, /api/track - marketplace');
   logger.info(`Storage backend: ${storage.label}`);
   logger.info(`Accounts: ${appDbAvailable() ? 'enabled' : 'disabled (no DATABASE_URL)'}`);
   logger.info('='.repeat(50));

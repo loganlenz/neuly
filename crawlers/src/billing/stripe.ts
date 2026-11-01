@@ -5,6 +5,7 @@ import { getAppDb, appDbAvailable } from '../db/appDb.js';
 import { AuthedRequest, requireUser, audit, Plan } from '../auth/auth.js';
 import { publicPlans } from '../web/plans.js';
 import { logger } from '../utils/logger.js';
+import { markLeadPurchasePaid } from '../marketplace/marketplace.js';
 
 /**
  * Thin Stripe integration over the REST API, active only when
@@ -21,11 +22,11 @@ import { logger } from '../utils/logger.js';
 
 const STRIPE_API = 'https://api.stripe.com/v1';
 
-function stripeConfigured(): boolean {
+export function stripeConfigured(): boolean {
   return Boolean(process.env.STRIPE_SECRET_KEY);
 }
 
-async function stripePost(path: string, form: Record<string, string>): Promise<Record<string, unknown>> {
+export async function stripePost(path: string, form: Record<string, string>): Promise<Record<string, unknown>> {
   const response = await axios.post(`${STRIPE_API}${path}`, new URLSearchParams(form).toString(), {
     headers: {
       Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}`,
@@ -204,7 +205,9 @@ export async function handleStripeWebhook(req: Request, res: Response): Promise<
     const object = event?.data?.object ?? {};
     const db = getAppDb();
 
-    if (type === 'checkout.session.completed') {
+    if (type === 'checkout.session.completed' && object.metadata?.kind === 'lead_unlock') {
+      await markLeadPurchasePaid(object);
+    } else if (type === 'checkout.session.completed') {
       const userId = object.client_reference_id || object.metadata?.userId;
       const plan = object.metadata?.plan;
       if (userId && (plan === 'pro' || plan === 'enterprise')) {

@@ -278,6 +278,12 @@ export const PersonSchema = z.object({
   linkedIn: z.string().url().optional(),
   twitter: z.string().optional(),
   imageUrl: z.string().url().optional(),
+  /** Where the headshot came from: 'Wikimedia Commons', 'Company website', 'Curated' */
+  imageSource: z.string().optional(),
+  /** Attribution / licence note for the headshot (Commons file name, page URL) */
+  imageAttribution: z.string().optional(),
+  /** Last headshot lookup (so people without a public image are not re-searched daily) */
+  imageCheckedAt: z.string().optional(),
   /** Provenance: curated, ClinicalTrials.gov investigator, NIH RePORTER PI, PubMed author corpus */
   source: z.string().optional(),
   /** Evidence supporting inclusion, e.g. NCT ids, grant numbers, paper counts */

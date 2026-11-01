@@ -38,5 +38,6 @@ export const DEFAULT_SCHEDULE: ScheduleEntry[] = [
   { crawler: 'grants', lane: 'bulk', cron: '0 4 * * *', dataType: 'grants', description: 'NIH RePORTER grants — daily 04:00 UTC' },
   { crawler: 'people', lane: 'bulk', cron: '30 5,17 * * *', dataType: 'people', description: 'People + SEC officers/directors — twice daily' },
   { crawler: 'care', lane: 'bulk', cron: '0 11 * * *', dataType: 'care_providers', description: 'Licensed care providers — daily 11:00 UTC' },
-  { crawler: 'openalex', lane: 'bulk', cron: '0 3 * * *', dataType: 'research_papers', description: 'OpenAlex citation refresh — daily 03:00 UTC' }
+  { crawler: 'openalex', lane: 'bulk', cron: '0 3 * * *', dataType: 'research_papers', description: 'OpenAlex citation refresh — daily 03:00 UTC' },
+  { crawler: 'headshots', lane: 'bulk', cron: '30 6 * * *', dataType: 'people', description: 'Headshots from Wikidata/Commons — daily 06:30 UTC' }
 ];
