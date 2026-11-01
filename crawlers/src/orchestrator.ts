@@ -17,10 +17,10 @@ import { logger } from './utils/logger.js';
 import { CareCrawler } from './crawlers/CareCrawler.js';
 import { NewsCrawler } from './crawlers/NewsCrawler.js';
 import { MarketCrawler } from './crawlers/MarketCrawler.js';
-import { Company, ResearchPaper, ClinicalTrial, Grant, CrawledData } from './models/types.js';
+import { Company, ResearchPaper, ClinicalTrial, Grant, FundingEvent, CrawledData } from './models/types.js';
 
 export type CrawlerName =
-  | 'clinicaltrials' | 'pubmed' | 'companies' | 'jobs' | 'events' | 'people'
+  | 'clinicaltrials' | 'trials-recent' | 'pubmed' | 'companies' | 'jobs' | 'events' | 'people'
   | 'legislation' | 'funding' | 'preprints' | 'grants' | 'openalex' | 'care'
   | 'news' | 'markets'
   | 'all';
@@ -87,6 +87,18 @@ export class CrawlerOrchestrator {
       }
     });
 
+    // Incremental refresh: only studies whose ClinicalTrials.gov record
+    // changed in the last few days. Cheap enough to run hourly, so status
+    // changes, new results and new registrations land within the hour.
+    this.crawlers.set('trials-recent', {
+      type: 'clinical_trials',
+      fullSnapshot: false,
+      run: () => {
+        const crawler = new ClinicalTrialsCrawler({ updatedSinceDays: Number(process.env.CT_RECENT_DAYS ?? 3) });
+        return crawler.run(ClinicalTrialsCrawler.getDefaultQueries());
+      }
+    });
+
     this.crawlers.set('pubmed', {
       type: 'research_papers',
       fullSnapshot: false,
@@ -130,13 +142,16 @@ export class CrawlerOrchestrator {
       fullSnapshot: false,
       run: async () => {
         // Curated figures plus investigators, grant PIs and prolific authors
-        // derived from the stored trials, grants and papers.
-        const [trials, grants, papers] = await Promise.all([
+        // derived from the stored trials, grants and papers, and the
+        // officers/directors of every tracked company from SEC filings.
+        const [trials, grants, papers, companies, fundingEvents] = await Promise.all([
           this.storage.load<ClinicalTrial>('clinical_trials'),
           this.storage.load<Grant>('grants'),
-          this.storage.load<ResearchPaper>('research_papers')
+          this.storage.load<ResearchPaper>('research_papers'),
+          this.storage.load<Company>('companies'),
+          this.storage.load<FundingEvent>('funding_events')
         ]);
-        return new PeopleCrawler({ trials, grants, papers }).crawl();
+        return new PeopleCrawler({ trials, grants, papers, companies, fundingEvents }).crawl();
       }
     });
 

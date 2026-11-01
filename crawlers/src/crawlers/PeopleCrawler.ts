@@ -7,9 +7,13 @@ import {
   SUBSTANCES,
   ClinicalTrial,
   Grant,
-  ResearchPaper
+  ResearchPaper,
+  Company,
+  FundingEvent
 } from '../models/types.js';
 import { logger } from '../utils/logger.js';
+import { SecInsidersSource, insiderTitle } from './SecInsidersSource.js';
+import { normalizeCompanyName } from './CompanyCrawler.js';
 
 export interface PeopleCrawlerOptions {
   /** Stored trials: principal investigators and study officials */
@@ -22,6 +26,14 @@ export interface PeopleCrawlerOptions {
   minPapers?: number;
   /** Skip PubMed publication-count lookups (tests / offline) */
   skipPubMed?: boolean;
+  /** Stored companies: officers and directors are pulled from SEC ownership filings */
+  companies?: Company[];
+  /** Stored Form D filings: named officers/directors of private companies */
+  fundingEvents?: FundingEvent[];
+  /** Skip SEC network lookups (tests / offline) */
+  skipSec?: boolean;
+  /** Injected for tests */
+  insidersSource?: SecInsidersSource;
 }
 
 /** Degrees and honorifics trailing a name on ClinicalTrials.gov ("Jane Doe, MD, PhD") */
@@ -627,6 +639,47 @@ export class PeopleCrawler extends BaseCrawler<Person> {
       logger.info(`[PeopleCrawler] ${added} people derived from stored trials, grants and papers`);
     }
 
+    // Executives and directors: SEC ownership filings for every public
+    // company with a CIK, plus the officers named on private companies'
+    // Form D filings. People already present gain the company link.
+    try {
+      const executives = await this.deriveExecutives(errors);
+      const byKey = new Map(people.map(p => [normalizePersonName(p.name).toLowerCase(), p] as const));
+      let newExecs = 0;
+      for (const exec of executives) {
+        const key = normalizePersonName(exec.name || '').toLowerCase();
+        if (!key) continue;
+        const existing = byKey.get(key);
+        if (existing) {
+          const merged = this.validate({
+            ...existing,
+            title: existing.title || exec.title,
+            organization: existing.organization || exec.organization,
+            companyIds: Array.from(new Set([...(existing.companyIds ?? []), ...(exec.companyIds ?? [])])),
+            affiliations: mergeAffiliations(existing.affiliations, exec.affiliations),
+            evidence: Array.from(new Set([...(existing.evidence ?? []), ...(exec.evidence ?? [])])).slice(0, 30),
+            source: existing.source && !existing.source.includes(exec.source || '') ? `${existing.source}; ${exec.source}` : existing.source || exec.source
+          });
+          if (merged) {
+            people[people.indexOf(existing)] = merged;
+            byKey.set(key, merged);
+          }
+          continue;
+        }
+        const validated = this.validate({ ...exec, crawledAt: this.getTimestamp() });
+        if (validated) {
+          people.push(validated);
+          byKey.set(key, validated);
+          newExecs++;
+        }
+      }
+      if (executives.length > 0) {
+        logger.info(`[PeopleCrawler] ${executives.length} executives/directors from SEC filings (${newExecs} new)`);
+      }
+    } catch (error) {
+      errors.push(`Executive sourcing failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+
     // Filter by query if provided
     let filteredPeople = people;
     if (query) {
@@ -653,6 +706,86 @@ export class PeopleCrawler extends BaseCrawler<Person> {
         duration: Date.now() - startTime
       }
     };
+  }
+
+  /**
+   * Officers and directors of tracked companies:
+   *  - public companies: SEC Forms 3/4/5 (structured ownership XML)
+   *  - private companies: the related persons on their Form D filings
+   * Each person is linked to the company (companyIds + affiliations).
+   */
+  private async deriveExecutives(errors: string[]): Promise<Partial<Person>[]> {
+    const companies = this.options.companies ?? [];
+    const byPerson = new Map<string, Partial<Person> & { evidence: string[]; companyIds: string[]; affiliations: NonNullable<Person['affiliations']> }>();
+
+    const upsert = (rawName: string, company: Pick<Company, 'id' | 'name' | 'substances'>, title: string, role: Person['role'], evidence: string, source: string, asOf?: string) => {
+      // Form D names are often shouted ("GUY LATORRE"); display them as names
+      const cased = rawName === rawName.toUpperCase() && /[A-Z]/.test(rawName)
+        ? rawName.toLowerCase().replace(/(^|[\s'\-.])([a-z])/g, (_m, sep, ch) => `${sep}${ch.toUpperCase()}`)
+        : rawName;
+      const name = normalizePersonName(cased);
+      if (!name) return;
+      const key = name.toLowerCase();
+      const current = byPerson.get(key) ?? {
+        id: this.generateId('per', this.slugify(name)),
+        name,
+        role,
+        title,
+        organization: company.name,
+        expertise: company.substances.filter(s => s !== 'Other'),
+        evidence: [],
+        companyIds: [],
+        affiliations: []
+      };
+      // Prefer the officer role over a pure board seat when both are seen
+      if (current.role !== 'Executive' && role === 'Executive') { current.role = 'Executive'; current.title = title; current.organization = company.name; }
+      if (!current.companyIds.includes(company.id)) current.companyIds.push(company.id);
+      const existingAff = current.affiliations.find(a => a.companyId === company.id);
+      if (existingAff) {
+        if (asOf && (!existingAff.asOf || asOf > existingAff.asOf)) { existingAff.role = title; existingAff.asOf = asOf; }
+      } else {
+        current.affiliations.push({ organization: company.name, role: title, current: true, companyId: company.id, source, asOf });
+      }
+      if (current.evidence.length < 30) current.evidence.push(evidence);
+      byPerson.set(key, current);
+    };
+
+    // Public companies: ownership filings
+    if (!this.options.skipSec) {
+      const source = this.options.insidersSource ?? new SecInsidersSource();
+      const withCik = companies.filter(c => c.cik);
+      for (const company of withCik) {
+        try {
+          const insiders = await source.fetchInsiders(company);
+          for (const insider of insiders) {
+            const title = insiderTitle(insider);
+            const role: Person['role'] = insider.isOfficer || insider.isDirector ? 'Executive' : 'Investor';
+            upsert(insider.name, company, title, role,
+              `${title} per SEC Form ${insider.formType} (${insider.asOf})`, 'SEC Form 4', insider.asOf);
+          }
+        } catch (error) {
+          errors.push(`SEC insiders for ${company.name}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+      }
+    }
+
+    // Private companies: Form D related persons
+    const byCik = new Map(companies.filter(c => c.cik).map(c => [c.cik!.replace(/^0+/, ''), c] as const));
+    const byName = new Map(companies.map(c => [normalizeCompanyName(c.name), c] as const));
+    for (const filing of this.options.fundingEvents ?? []) {
+      if (!filing.relatedPersons?.length) continue;
+      const company = (filing.cik && byCik.get(filing.cik.replace(/^0+/, ''))) || byName.get(normalizeCompanyName(filing.companyName));
+      if (!company) continue;
+      for (const person of filing.relatedPersons) {
+        const roles = person.roles.map(r => r.replace(/\s+/g, ' ').trim()).filter(Boolean);
+        const title = roles.find(r => !/^(executive officer|director|promoter)$/i.test(r)) || roles.join(' & ') || 'Related Person';
+        const isExec = roles.some(r => /officer|director|founder|ceo|cfo|president|chair/i.test(r));
+        upsert(person.name, company, title, isExec ? 'Executive' : 'Investor',
+          `${roles.join(', ') || 'Related person'} on SEC Form D (${filing.filedAt})`, 'SEC Form D', filing.filedAt);
+      }
+    }
+
+    return Array.from(byPerson.values()).map(p => ({ ...p, source: p.affiliations.some(a => a.source === 'SEC Form 4') ? 'SEC Form 4' : 'SEC Form D' }));
   }
 
   /**
@@ -831,4 +964,14 @@ export class PeopleCrawler extends BaseCrawler<Person> {
       return bCount - aCount;
     });
   }
+}
+
+function mergeAffiliations(a: Person['affiliations'], b: Person['affiliations']): Person['affiliations'] {
+  const out = [...(a ?? [])];
+  for (const aff of b ?? []) {
+    const idx = out.findIndex(x => (x.companyId && x.companyId === aff.companyId) || x.organization.toLowerCase() === aff.organization.toLowerCase());
+    if (idx === -1) out.push(aff);
+    else out[idx] = { ...out[idx], ...aff, role: aff.role ?? out[idx].role };
+  }
+  return out.length > 0 ? out : undefined;
 }

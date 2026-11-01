@@ -6,9 +6,10 @@ import { runAlertDispatch } from './alerts/alerts.js';
 import { runNewsletter } from './newsletter/digest.js';
 import { logger } from './utils/logger.js';
 import { DEFAULT_SCHEDULE, Lane, ScheduleEntry } from './schedule.js';
+import { appDbAvailable, getAppDb } from './db/appDb.js';
 
 function scheduleFor(entry: ScheduleEntry): string {
-  const override = process.env[`SCHEDULE_${entry.crawler.toUpperCase()}`];
+  const override = process.env[`SCHEDULE_${entry.crawler.toUpperCase().replace(/-/g, '_')}`];
   if (override) {
     if (!cron.validate(override)) {
       logger.warn(`[Scheduler] Invalid cron override for ${entry.crawler}: "${override}", using default`);
@@ -87,6 +88,39 @@ async function main(): Promise<void> {
     });
   });
   logger.info(`  ${'newsletter'.padEnd(16)} ${newsletterCron.padEnd(18)} Weekly digest — Mondays 13:00 UTC`);
+
+  // Admin console: "run this crawler now" inserts a crawl_requests row; the
+  // scheduler claims it here and runs it in the crawler's lane.
+  if (appDbAvailable()) {
+    const pollMs = Number(process.env.CRAWL_REQUEST_POLL_MS ?? 30_000);
+    const pollRequests = async () => {
+      try {
+        const claimed = await getAppDb().query(
+          `UPDATE crawl_requests SET started_at = now()
+           WHERE id IN (SELECT id FROM crawl_requests WHERE started_at IS NULL ORDER BY requested_at LIMIT 5)
+           RETURNING id, crawler`
+        );
+        for (const row of claimed.rows) {
+          const crawler = row.crawler as Exclude<CrawlerName, 'all'>;
+          const lane = laneOf(crawler);
+          logger.info(`[Scheduler] Admin request #${row.id}: running ${crawler}`);
+          queues[lane] = queues[lane]
+            .then(() => orchestrator.run(crawler))
+            .then(() => getAppDb().query('UPDATE crawl_requests SET finished_at = now() WHERE id = $1', [row.id]))
+            .catch(async error => {
+              const message = error instanceof Error ? error.message : String(error);
+              logger.error(`[Scheduler] Admin request #${row.id} (${crawler}) failed: ${message}`);
+              await getAppDb().query('UPDATE crawl_requests SET finished_at = now(), error = $2 WHERE id = $1', [row.id, message.slice(0, 500)]).catch(() => undefined);
+            })
+            .then(() => undefined);
+        }
+      } catch (error) {
+        logger.warn(`[Scheduler] crawl_requests poll failed: ${error instanceof Error ? error.message : error}`);
+      }
+    };
+    setInterval(() => { void pollRequests(); }, pollMs);
+    logger.info(`  ${'admin-requests'.padEnd(16)} ${`every ${pollMs / 1000}s`.padEnd(18)} Admin-triggered crawls (crawl_requests table)`);
+  }
 
   if (process.env.RUN_ON_START === 'true') {
     // Order matters on a cold start: companies derive from trials, funding

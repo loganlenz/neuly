@@ -15,6 +15,7 @@ import { logger } from '../utils/logger.js';
 import { detectSubstances as detectTrackedSubstances } from '../utils/substances.js';
 
 interface CTGovStudy {
+  hasResults?: boolean;
   protocolSection?: {
     identificationModule?: {
       nctId?: string;
@@ -26,10 +27,12 @@ interface CTGovStudy {
     };
     statusModule?: {
       overallStatus?: string;
+      whyStopped?: string;
       startDateStruct?: { date?: string };
       completionDateStruct?: { date?: string };
       primaryCompletionDateStruct?: { date?: string };
       lastUpdatePostDateStruct?: { date?: string };
+      resultsFirstPostDateStruct?: { date?: string };
     };
     descriptionModule?: {
       briefSummary?: string;
@@ -42,6 +45,13 @@ interface CTGovStudy {
     designModule?: {
       studyType?: string;
       phases?: string[];
+      designInfo?: {
+        allocation?: string;
+        primaryPurpose?: string;
+        observationalModel?: string;
+        timePerspective?: string;
+        maskingInfo?: { masking?: string };
+      };
       enrollmentInfo?: {
         count?: number;
         type?: string;
@@ -98,10 +108,16 @@ interface CTGovResponse {
  * Uses the ClinicalTrials.gov API v2
  * Documentation: https://clinicaltrials.gov/data-api/api
  */
+export interface ClinicalTrialsCrawlerOptions {
+  /** Only fetch studies whose record changed in the last N days (incremental refresh) */
+  updatedSinceDays?: number;
+}
+
 export class ClinicalTrialsCrawler extends BaseCrawler<ClinicalTrial> {
   private xmlParser: XMLParser;
+  private readonly updatedSinceDays?: number;
 
-  constructor() {
+  constructor(options: ClinicalTrialsCrawlerOptions = {}) {
     super({
       name: 'ClinicalTrials.gov',
       baseUrl: 'https://clinicaltrials.gov/api/v2',
@@ -115,6 +131,7 @@ export class ClinicalTrialsCrawler extends BaseCrawler<ClinicalTrial> {
       ignoreAttributes: false,
       attributeNamePrefix: '@_'
     });
+    this.updatedSinceDays = options.updatedSinceDays;
   }
 
   /**
@@ -128,12 +145,14 @@ export class ClinicalTrialsCrawler extends BaseCrawler<ClinicalTrial> {
     try {
       let pageToken: string | undefined;
       let totalFetched = 0;
-      const maxResults = 1000; // Limit per query
+      const maxResults = 2000; // Limit per query
 
       do {
+        // Every status is fetched — suspended, terminated and withdrawn
+        // included — so a trial that stops is seen stopping (a change event),
+        // not silently frozen at its last active status.
         const params: Record<string, string> = {
           'query.term': query || 'psilocybin OR MDMA OR ketamine OR LSD OR ibogaine OR ayahuasca OR psychedelic OR kratom OR kava OR salvinorin OR sceletium OR "amanita muscaria"',
-          'filter.overallStatus': 'RECRUITING,ACTIVE_NOT_RECRUITING,ENROLLING_BY_INVITATION,NOT_YET_RECRUITING,COMPLETED',
           'pageSize': '100',
           'fields': [
             'NCTId',
@@ -142,6 +161,14 @@ export class ClinicalTrialsCrawler extends BaseCrawler<ClinicalTrial> {
             'OverallStatus',
             'Phase',
             'StudyType',
+            'DesignAllocation',
+            'DesignPrimaryPurpose',
+            'DesignObservationalModel',
+            'DesignTimePerspective',
+            'DesignMasking',
+            'HasResults',
+            'ResultsFirstPostDate',
+            'WhyStopped',
             'Condition',
             'InterventionName',
             'InterventionType',
@@ -172,6 +199,12 @@ export class ClinicalTrialsCrawler extends BaseCrawler<ClinicalTrial> {
 
         if (pageToken) {
           params['pageToken'] = pageToken;
+        }
+        // Incremental mode: only records updated in the window. The scheduler
+        // uses this for the frequent refresh and a full sweep daily.
+        if (this.updatedSinceDays) {
+          const since = new Date(Date.now() - this.updatedSinceDays * 86400000).toISOString().slice(0, 10);
+          params['filter.advanced'] = `AREA[LastUpdatePostDate]RANGE[${since},MAX]`;
         }
 
         const response = await this.request<CTGovResponse>('/studies', {
@@ -263,6 +296,14 @@ export class ClinicalTrialsCrawler extends BaseCrawler<ClinicalTrial> {
       status,
       phase,
       studyType: protocol.designModule?.studyType,
+      observationalModel: protocol.designModule?.designInfo?.observationalModel,
+      timePerspective: protocol.designModule?.designInfo?.timePerspective,
+      allocation: protocol.designModule?.designInfo?.allocation,
+      primaryPurpose: protocol.designModule?.designInfo?.primaryPurpose,
+      masking: protocol.designModule?.designInfo?.maskingInfo?.masking,
+      hasResults: typeof study.hasResults === 'boolean' ? study.hasResults : undefined,
+      resultsFirstPostDate: parseDate(protocol.statusModule?.resultsFirstPostDateStruct?.date),
+      whyStopped: cleanText(protocol.statusModule?.whyStopped),
       conditions,
       interventions: interventions.map(i => ({
         type: i.type || 'Drug',
@@ -428,7 +469,21 @@ export class ClinicalTrialsCrawler extends BaseCrawler<ClinicalTrial> {
       'Amanita muscaria',
       'cannabidiol anxiety',
       'cannabis PTSD',
-      'cannabis chronic pain'
+      'cannabis chronic pain',
+      // Observational studies, registries and real-world evidence
+      'psilocybin observational',
+      'psychedelic observational study',
+      'psychedelic registry',
+      'psychedelic survey',
+      'ketamine observational',
+      'ketamine registry',
+      'esketamine real-world',
+      'MDMA observational',
+      'ayahuasca observational',
+      'psychedelic retreat',
+      'psilocybin naturalistic',
+      'microdosing observational',
+      'psychedelic expanded access'
     ];
   }
 }

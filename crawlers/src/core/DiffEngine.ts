@@ -17,10 +17,10 @@ export interface DiffOptions {
  * persisted via upsert but does not generate noise in the change log.
  */
 const SIGNIFICANT_FIELDS: Partial<Record<DataType, string[]>> = {
-  clinical_trials: ['status', 'phase', 'enrollment', 'completionDate', 'primaryCompletionDate'],
+  clinical_trials: ['status', 'phase', 'enrollment', 'completionDate', 'primaryCompletionDate', 'hasResults', 'whyStopped'],
   companies: ['stage', 'ticker', 'type'],
   jobs: ['title'],
-  people: ['organization', 'title', 'role'],
+  people: ['organization', 'title', 'role', 'companyIds'],
   events: ['startDate', 'endDate'],
   educational_resources: [],
   legislation: ['status', 'lastAction', 'lastActionDate'],
